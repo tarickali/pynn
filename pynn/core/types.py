@@ -7,4 +7,4 @@ List = list
 Number = np.number | int | float | bool
 ArrayLike = Array | List | Number
 DataType = np.dtype | int | float | bool
-Shape = tuple[None | int, ...]
+Shape = tuple[None | np.int64, ...]

@@ -1,9 +1,10 @@
 from __future__ import annotations
 from typing import Any
 import numpy as np
-import numba as nb
+from numba import njit
 
-from pynn.core import Array, List, Number, ArrayLike, DataType, Shape
+from pynn.core import Array, Number, ArrayLike, DataType, Shape
+from pynn.core.primitives import *
 
 __all__ = ["Tensor"]
 
@@ -20,7 +21,7 @@ class Tensor:
             self.data = self.data.astype(dtype)
 
     def transpose(self) -> Tensor:
-        return Tensor(self.data.T)
+        return Tensor(njit()(self.data.T))
 
     def numpy(self) -> Array:
         return self.data
@@ -31,9 +32,11 @@ class Tensor:
     # ------------------------------------------------------------------------ #
     # Getter and Setter
     # ------------------------------------------------------------------------ #
+    @njit
     def __getitem__(self, key: int | tuple[int] | slice) -> Array | Number:
         return self.data[key]
 
+    @njit
     def __setitem__(self, key: int | tuple[int] | slice, value: ArrayLike) -> None:
         self.data[key] = value
 
@@ -42,23 +45,23 @@ class Tensor:
     # ------------------------------------------------------------------------ #
     def __add__(self, other: Tensor | TensorLike) -> Tensor:
         other = convert_tensor_input(other)
-        return Tensor(data=self.data + other.data)
+        return Tensor(add(self.data, other.data))
 
     def __sub__(self, other: Tensor | TensorLike) -> Tensor:
         other = convert_tensor_input(other)
-        return Tensor(data=self.data - other.data)
+        return Tensor(subtract(self.data, other.data))
 
     def __mul__(self, other: Tensor | TensorLike) -> Tensor:
         other = convert_tensor_input(other)
-        return Tensor(data=self.data * other.data)
+        return Tensor(multiply(self.data, other.data))
 
     def __matmul__(self, other: Tensor | TensorLike) -> Tensor:
         other = convert_tensor_input(other)
-        return Tensor(data=self.data @ other.data)
+        return Tensor(matrix_multiply(self.data, other.data))
 
     def __truediv__(self, other: Tensor | TensorLike) -> Tensor:
         other = convert_tensor_input(other)
-        return Tensor(data=self.data / other.data)
+        return Tensor(true_division(self.data, other.data))
 
     def __radd__(self, other: Tensor | TensorLike) -> Tensor:
         return self + other
@@ -71,7 +74,7 @@ class Tensor:
 
     def __rtruediv__(self, other: Tensor | TensorLike) -> Tensor:
         other = convert_tensor_input(other)
-        return Tensor(data=other.data / self.data)
+        return Tensor(true_division(other.data, self.data))
 
     # ------------------------------------------------------------------------ #
     # Unary Operations
@@ -79,44 +82,44 @@ class Tensor:
     def __pow__(self, other: Number) -> Tensor:
         if not isinstance(other, Number):
             raise ValueError(f"Cannot perform operation on {type(other)}")
-        return Tensor(data=self.data**other)
+        return Tensor(power(self.data, other))
 
     def __neg__(self) -> Tensor:
-        return Tensor(data=-self.data)
+        return Tensor(negate(self.data))
 
     # ------------------------------------------------------------------------ #
     # Comparison Operations
     # ------------------------------------------------------------------------ #
     def __eq__(self, other: Tensor | TensorLike) -> Tensor:
         other = convert_tensor_input(other)
-        return Tensor(data=self.data == other.data)
+        return Tensor(data=equal(self.data, other.data))
 
     def __ne__(self, other: Tensor | TensorLike) -> Tensor:
         other = convert_tensor_input(other)
-        return Tensor(data=self.data != other.data)
+        return Tensor(data=not_equal(self.data, other.data))
 
     def __ge__(self, other: Tensor | TensorLike) -> Tensor:
         other = convert_tensor_input(other)
-        return Tensor(data=self.data >= other.data)
+        return Tensor(data=greater_than_equal(self.data, other.data))
 
     def __gt__(self, other: Tensor | TensorLike) -> Tensor:
         other = convert_tensor_input(other)
-        return Tensor(data=self.data > other.data)
+        return Tensor(data=greater_than(self.data, other.data))
 
     def __le__(self, other: Tensor | TensorLike) -> Tensor:
         other = convert_tensor_input(other)
-        return Tensor(data=self.data <= other.data)
+        return Tensor(data=less_than_equal(self.data, other.data))
 
     def __lt__(self, other: Tensor | TensorLike) -> Tensor:
         other = convert_tensor_input(other)
-        return Tensor(data=self.data < other.data)
+        return Tensor(data=less_than(self.data, other.data))
 
     def __repr__(self) -> str:
         return f"Tensor({self.data}, dtype={self.dtype}, shape={self.shape})"
 
     @property
     def T(self) -> Tensor:
-        return Tensor(self.data.T)
+        return self.transpose()
 
     @property
     def shape(self) -> Shape:
