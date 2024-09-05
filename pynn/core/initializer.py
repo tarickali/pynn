@@ -3,6 +3,8 @@ from abc import ABC, abstractmethod
 from pynn.core.types import Shape
 from pynn.core.tensor import Tensor
 
+__all__ = ["Initializer"]
+
 
 class Initializer(ABC):
     @abstractmethod

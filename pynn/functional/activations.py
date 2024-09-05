@@ -1,6 +1,6 @@
 import numpy as np
 from pynn.core.types import Array, Number
-from pynn.core import Tensor, Tensor
+from pynn.core import Tensor
 
 TensorLike = Tensor | Array | Number
 

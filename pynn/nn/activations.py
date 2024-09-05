@@ -17,11 +17,11 @@ __all__ = [
 class Identity(Activation):
     """Identity Activation
 
-    Computes the elementwise function `f(x) = x`.
+    Computes the elementwise computetion `f(x) = x`.
 
     """
 
-    def func(self, x: Tensor) -> Tensor:
+    def compute(self, x: Tensor) -> Tensor:
         return identity(x)
 
 
@@ -29,7 +29,7 @@ class Affine(Activation):
     """Affine Activation.
 
     Parameterized by `slope` [float] and `intercept` [float], computes the
-    function `f(x) = slope * x + intercept`.
+    computetion `f(x) = slope * x + intercept`.
 
     Parameters
     ----------
@@ -43,14 +43,14 @@ class Affine(Activation):
         self.slope = slope
         self.intercept = intercept
 
-    def func(self, x: Tensor) -> Tensor:
+    def compute(self, x: Tensor) -> Tensor:
         return affine(x, self.slope, self.intercept)
 
 
 class ReLU(Activation):
     """ReLU Activation
 
-    Parameterized by `alpha` [float], computes the function
+    Parameterized by `alpha` [float], computes the computetion
     ```
     f(x) = {
         x : x >= 0,
@@ -64,36 +64,36 @@ class ReLU(Activation):
         super().__init__()
         self.alpha = alpha
 
-    def func(self, x: Tensor) -> Tensor:
+    def compute(self, x: Tensor) -> Tensor:
         return relu(x, self.alpha)
 
 
 class Sigmoid(Activation):
     """Sigmoid Activation
 
-    Computes the function `f(x) = 1 / (1 + exp(-x))`.
+    Computes the computetion `f(x) = 1 / (1 + exp(-x))`.
 
     """
 
-    def func(self, x: Tensor) -> Tensor:
+    def compute(self, x: Tensor) -> Tensor:
         return sigmoid(x)
 
 
 class Tanh(Activation):
     """Tanh Activation
 
-    Computes the function `f(x) = tanh(x)`.
+    Computes the computetion `f(x) = tanh(x)`.
 
     """
 
-    def func(self, x: Tensor) -> Tensor:
+    def compute(self, x: Tensor) -> Tensor:
         return tanh(x)
 
 
 class ELU(Activation):
     """ELU Activation
 
-    Parameterized by `alpha` [float], computes the function
+    Parameterized by `alpha` [float], computes the computetion
     ```
     f(x) = {
         x : x >= 0,
@@ -107,14 +107,14 @@ class ELU(Activation):
         super().__init__()
         self.alpha = alpha
 
-    def func(self, x: Tensor) -> Tensor:
+    def compute(self, x: Tensor) -> Tensor:
         return elu(x, self.alpha)
 
 
 class SELU(Activation):
     """SELU Activation
 
-    Computes the function
+    Computes the computetion
     ```
     f(x) = {
         SCALE * x : x >= 0,
@@ -127,28 +127,28 @@ class SELU(Activation):
 
     """
 
-    def func(self, x: Tensor) -> Tensor:
+    def compute(self, x: Tensor) -> Tensor:
         return selu(x)
 
 
 class SoftPlus(Activation):
     """SoftPlus Activation
 
-    Computes the function `f(x) = log(1 + exp(x))`.
+    Computes the computetion `f(x) = log(1 + exp(x))`.
 
     """
 
-    def func(self, x: Tensor) -> Tensor:
+    def compute(self, x: Tensor) -> Tensor:
         return softplus(x)
 
 
 class Softmax(Activation):
     """Softmax Activation
 
-    Computes the function `f(x) = exp(x) / sum(exp(x))`.
+    Computes the computetion `f(x) = exp(x) / sum(exp(x))`.
 
     NOTE: Returns the all ones matrix with shape of input z,
-    since the categorical cross-entropy loss function L computes
+    since the categorical cross-entropy loss computetion L computes
     the appropriate gradient of L with respect to z.
 
     NOTE: The true gradient of softmax with respect to z is a Jacobian,
@@ -161,5 +161,5 @@ class Softmax(Activation):
 
     """
 
-    def func(self, x: Tensor) -> Tensor:
+    def compute(self, x: Tensor) -> Tensor:
         return softmax(x)

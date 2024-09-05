@@ -4,7 +4,7 @@ import numpy as np
 from numba import njit
 
 from pynn.core import Array, Number, ArrayLike, DataType, Shape
-from pynn.core.math.primitives import *
+from pynn.core.primitives import *
 from pynn.core.utils import expand_array, shrink_array
 
 __all__ = ["Tensor"]

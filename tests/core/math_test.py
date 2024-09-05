@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 from pynn.core import Tensor
-import pynn.core.math.functions as pmath
+import pynn.core.math as pmath
 
 
 def test_log():
@@ -30,9 +30,9 @@ def test_log():
     torch_loss = torch.sum(torch_t - torch_y) / 32
     torch_loss.backward()
 
-    for tensor, torch_tensor in [
+    for ptensor, tensor in [
         (tensor_W, torch_W),
         (tensor_x, torch_x),
         (tensor_b, torch_b),
     ]:
-        assert np.allclose(tensor.grad, torch_tensor.grad.numpy())
+        assert np.allclose(ptensor.grad, tensor.grad.numpy())

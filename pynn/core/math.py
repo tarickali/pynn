@@ -1,8 +1,8 @@
 import numpy as np
 
-from ..tensor import Tensor
-from ..types import Array, Number
-from ..constants import EPSILON
+from .tensor import Tensor
+from .types import Array, Number
+from .constants import EPSILON
 
 
 __all__ = ["abs", "sum", "mean", "exp", "log"]
@@ -18,7 +18,7 @@ def abs(x: TensorLike) -> Tensor:
     data = np.abs(array)
 
     output = Tensor(data)
-    output.add((x,))
+    output.add_children((x,))
 
     def reverse():
         grad = np.sign(array)
@@ -65,7 +65,7 @@ def mean(x: TensorLike, axis: int | tuple[int] = None) -> Tensor:
         norm = (
             np.prod([np.size(array, axis=i) for i in axis])
             if axis is not None
-            else arr.size
+            else array.size
         )
         grad = np.full_like(array, 1.0 / norm)
         x.grad = grad * output.grad

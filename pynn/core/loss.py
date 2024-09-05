@@ -2,6 +2,8 @@ from abc import ABC, abstractmethod
 
 from pynn.core import Tensor
 
+__all__ = ["Loss"]
+
 
 class Loss(ABC):
     @abstractmethod

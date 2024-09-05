@@ -1,6 +1,6 @@
 from numba import njit
 
-from ..types import Array, Number
+from .types import Array, Number
 
 __all__ = [
     "add",

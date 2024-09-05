@@ -1,6 +1,8 @@
 from abc import ABC, abstractmethod
 from pynn.core import Tensor
 
+__all__ = ["Activation"]
+
 
 class Activation(ABC):
     @abstractmethod

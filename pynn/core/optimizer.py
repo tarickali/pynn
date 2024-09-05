@@ -2,6 +2,8 @@ from abc import ABC, abstractmethod
 
 from pynn.core import Tensor
 
+__all__ = ["Optimizer"]
+
 
 class Optimizer(ABC):
     def __init__(
