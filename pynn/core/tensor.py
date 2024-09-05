@@ -4,7 +4,8 @@ import numpy as np
 from numba import njit
 
 from pynn.core import Array, Number, ArrayLike, DataType, Shape
-from pynn.core.primitives import *
+from pynn.core.math.primitives import *
+from pynn.core.utils import expand_array, shrink_array
 
 __all__ = ["Tensor"]
 
@@ -15,19 +16,50 @@ class Tensor:
     def __init__(self, data: Tensor | TensorLike, dtype: DataType = np.float64) -> None:
         data = data.data if isinstance(data, Tensor) else data
         self.data: Array = np.array(data, dtype=dtype)
+        self.grad: Array = np.zeros_like(self.data, dtype=np.float64)
 
+        self.forward: str = None
+        self.reverse = lambda: None
+
+        self.children: tuple[Tensor] = ()
+        self.trainable = True
+
+    # TODO: Should I have cast be inplace?
     def cast(self, dtype: DataType) -> None:
         if dtype != self.dtype:
             self.data = self.data.astype(dtype)
-
-    def transpose(self) -> Tensor:
-        return Tensor(njit()(self.data.T))
 
     def numpy(self) -> Array:
         return self.data
 
     def item(self) -> Number:
         return self.data.item()
+
+    def zero_grad(self) -> None:
+        self.grad = np.zeros_like(self.grad)
+
+    def add_children(self, tensors: tuple[Tensor, ...]) -> None:
+        self.children += tensors
+
+    def backward(self) -> None:
+        order = list[Tensor]()
+        visited = set[Tensor]()
+
+        def build(x: Tensor) -> None:
+            if x not in visited:
+                visited.add(x)
+                for child in x.children:
+                    build(child)
+                order.append(x)
+
+        build(self)
+
+        self.grad = np.ones_like(self.data)
+        for x in reversed(order):
+            x.reverse()
+
+    def transpose(self) -> Tensor:
+        return Tensor(transpose(self.data))
 
     # ------------------------------------------------------------------------ #
     # Getter and Setter
@@ -45,23 +77,82 @@ class Tensor:
     # ------------------------------------------------------------------------ #
     def __add__(self, other: Tensor | TensorLike) -> Tensor:
         other = convert_tensor_input(other)
-        return Tensor(add(self.data, other.data))
+
+        output = Tensor(add(self.data, other.data))
+        output.add_children((self, other))
+
+        def reverse():
+            self.grad = expand_array(self.grad, output.grad.shape)
+            other.grad = expand_array(other.grad, output.grad.shape)
+            self.grad += output.grad
+            other.grad += output.grad
+            self.grad = shrink_array(self.grad, self.data.shape)
+            other.grad = shrink_array(other.grad, other.data.shape)
+
+        output.forward = "add"
+        output.reverse = reverse
+
+        return output
 
     def __sub__(self, other: Tensor | TensorLike) -> Tensor:
         other = convert_tensor_input(other)
-        return Tensor(subtract(self.data, other.data))
+
+        output = Tensor(subtract(self.data, other.data))
+        output.add_children((self, other))
+
+        def reverse():
+            self.grad = expand_array(self.grad, output.grad.shape)
+            other.grad = expand_array(other.grad, output.grad.shape)
+            self.grad += output.grad
+            other.grad += -output.grad
+            self.grad = shrink_array(self.grad, self.data.shape)
+            other.grad = shrink_array(other.grad, other.data.shape)
+
+        output.forward = "sub"
+        output.reverse = reverse
+
+        return output
 
     def __mul__(self, other: Tensor | TensorLike) -> Tensor:
         other = convert_tensor_input(other)
-        return Tensor(multiply(self.data, other.data))
+
+        output = Tensor(multiply(self.data, other.data))
+        output.add_children((self, other))
+
+        def reverse():
+            self.grad = expand_array(self.grad, output.grad.shape)
+            other.grad = expand_array(other.grad, output.grad.shape)
+            self.grad += other.data * output.grad
+            other.grad += self.data * output.grad
+            self.grad = shrink_array(self.grad, self.data.shape)
+            other.grad = shrink_array(other.grad, other.data.shape)
+
+        output.forward = "mul"
+        output.reverse = reverse
+
+        return output
 
     def __matmul__(self, other: Tensor | TensorLike) -> Tensor:
         other = convert_tensor_input(other)
-        return Tensor(matrix_multiply(self.data, other.data))
+
+        output = Tensor(matrix_multiply(self.data, other.data))
+        output.add_children((self, other))
+
+        def reverse():
+            self.grad = expand_array(self.grad, output.grad.shape)
+            other.grad = expand_array(other.grad, output.grad.shape)
+            self.grad += output.grad @ other.data.T
+            other.grad += self.data.T @ output.grad
+            self.grad = shrink_array(self.grad, self.data.shape)
+            other.grad = shrink_array(other.grad, other.data.shape)
+
+        output.forward = "matmul"
+        output.reverse = reverse
+
+        return output
 
     def __truediv__(self, other: Tensor | TensorLike) -> Tensor:
-        other = convert_tensor_input(other)
-        return Tensor(true_division(self.data, other.data))
+        return self * other**-1
 
     def __radd__(self, other: Tensor | TensorLike) -> Tensor:
         return self + other
@@ -73,8 +164,7 @@ class Tensor:
         return self * other
 
     def __rtruediv__(self, other: Tensor | TensorLike) -> Tensor:
-        other = convert_tensor_input(other)
-        return Tensor(true_division(other.data, self.data))
+        return self**-1 * other
 
     # ------------------------------------------------------------------------ #
     # Unary Operations
@@ -82,10 +172,30 @@ class Tensor:
     def __pow__(self, other: Number) -> Tensor:
         if not isinstance(other, Number):
             raise ValueError(f"Cannot perform operation on {type(other)}")
-        return Tensor(power(self.data, other))
+
+        output = Tensor(power(self.data, other))
+        output.add_children((self,))
+
+        def reverse():
+            grad = Tensor(other * self.data.array ** (other - 1))
+            self.grad += grad * output.grad
+
+        output.forward = "pow"
+        output.reverse = reverse
+
+        return output
 
     def __neg__(self) -> Tensor:
-        return Tensor(negate(self.data))
+        output = Tensor(negate(self.data))
+        output.add_children((self,))
+
+        def reverse():
+            self.grad += -output.grad
+
+        output.forward = "neg"
+        output.reverse = reverse
+
+        return output
 
     # ------------------------------------------------------------------------ #
     # Comparison Operations
@@ -113,6 +223,9 @@ class Tensor:
     def __lt__(self, other: Tensor | TensorLike) -> Tensor:
         other = convert_tensor_input(other)
         return Tensor(data=less_than(self.data, other.data))
+
+    def __hash__(self) -> int:
+        return id(self)
 
     def __repr__(self) -> str:
         return f"Tensor({self.data}, dtype={self.dtype}, shape={self.shape})"

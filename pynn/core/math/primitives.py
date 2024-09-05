@@ -1,6 +1,6 @@
 from numba import njit
 
-from .types import Array, Number
+from ..types import Array, Number
 
 __all__ = [
     "add",
@@ -10,6 +10,7 @@ __all__ = [
     "true_division",
     "power",
     "negate",
+    "transpose",
     "equal",
     "not_equal",
     "greater_than_equal",
@@ -52,6 +53,11 @@ def power(x: Array, y: Number) -> Array:
 @njit
 def negate(x: Array) -> Array:
     return -x
+
+
+@njit
+def transpose(x: Array) -> Array:
+    return x.T
 
 
 @njit
