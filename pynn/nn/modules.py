@@ -2,16 +2,25 @@ from typing import Any
 
 from pynn.core.types import Shape
 from pynn.core import Tensor, Module
-from pynn.functional.modules import *
+from pynn.functional.modules import linear, flatten, conv2d
+from pynn.utils.array import make_pair
+
 from pynn.nn.factories import activation_factory, initializer_factory
 
 __all__ = ["Linear", "Conv2d", "Flatten", "Activation"]
 
 
 class Linear(Module):
+    """Linear (fully connected) layer: output = activation(X @ W + b).
+
+    Shape can be specified in two ways:
+    - Linear(in_features, out_features, ...) — both dimensions (PyTorch-style).
+    - Linear(out_features, ...) — only output size; in_features inferred on first forward.
+    """
+
     def __init__(
         self,
-        output_dim: int,
+        *dims: int,
         activation: str | dict[str, Any] = "identity",
         weight_initializer: str | dict[str, Any] = "xavier_normal",
         bias_initializer: str | dict[str, Any] = "zeros",
@@ -20,7 +29,16 @@ class Linear(Module):
     ) -> None:
         super().__init__()
 
-        self.output_dim = output_dim
+        if len(dims) == 1:
+            self.in_features = None  # inferred at build
+            self.out_features = dims[0]
+        elif len(dims) == 2:
+            self.in_features, self.out_features = dims[0], dims[1]
+        else:
+            raise TypeError(
+                "Linear() takes 1 or 2 positional dimension arguments "
+                "(out_features, or in_features and out_features), got %d" % len(dims)
+            )
         self.activation = activation
         self.weight_initializer = weight_initializer
         self.bias_initializer = bias_initializer
@@ -32,48 +50,45 @@ class Linear(Module):
         if self.include_bias:
             self.bias_init = initializer_factory(self.bias_initializer)
 
-        # Set input_dim to None until parameters are initialized
-        self.input_dim = None
-
     def build(self, input_shape: int | Shape) -> None:
         assert len(input_shape) == 2
-        self.input_dim = input_shape[1]
+        if self.in_features is None:
+            self.in_features = input_shape[1]
+        else:
+            assert (
+                input_shape[1] == self.in_features
+            ), f"Expected in_features {self.in_features}, got {input_shape[1]}"
 
         self.parameters["W"] = Tensor(
-            self.weight_init((self.input_dim, self.output_dim))
+            self.weight_init((self.in_features, self.out_features))
         )
-        assert self.parameters["W"].shape == (self.input_dim, self.output_dim)
+        assert self.parameters["W"].shape == (self.in_features, self.out_features)
 
         if self.include_bias:
-            self.parameters["b"] = Tensor(self.bias_init((self.output_dim,)))
-            assert self.parameters["b"].shape == (self.output_dim,)
+            self.parameters["b"] = Tensor(self.bias_init((self.out_features,)))
+            assert self.parameters["b"].shape == (self.out_features,)
 
         self.initialized = True
 
     def forward(self, X: Tensor) -> Tensor:
         if not self.initialized:
             self.build(X.shape)
-        assert X.shape[1] == self.input_dim
+        assert X.shape[1] == self.in_features
 
-        # Get weights and bias
         W, b = self.parameters["W"], self.parameters.get("b", None)
-
-        # Compute linear transformation
         Z = linear(X, W, b)
+        assert Z.shape == (X.shape[0], self.out_features)
 
-        assert Z.shape == (X.shape[0], self.output_dim)
-
-        # Compute activation
         A = self.act_fn(Z)
-        assert A.shape == (X.shape[0], self.output_dim)
+        assert A.shape == (X.shape[0], self.out_features)
 
         return A
 
     @property
     def hyperparameters(self) -> dict[str, Any]:
         return {
-            "input_dim": self.input_dim,
-            "output_dim": self.output_dim,
+            "in_features": self.in_features,
+            "out_features": self.out_features,
             "activation": self.activation,
             "weight_initializer": self.weight_initializer,
             "bias_initializer": self.bias_initializer,
@@ -81,14 +96,23 @@ class Linear(Module):
         }
 
 
+def _same_padding(in_size: int, kernel_size: int, stride: int) -> int:
+    """Padding per side so that out_size = ceil(in_size / stride)."""
+    out_size = (in_size + stride - 1) // stride
+    total = (out_size - 1) * stride + kernel_size - in_size
+    return max(0, (total + 1) // 2)
+
+
 class Conv2d(Module):
+    """2D Convolution Layer: output = activation(X * K + B)."""
+
     def __init__(
         self,
         in_channels: int,
         out_channels: int,
         kernel_size: int | tuple[int, int],
-        # stride: int | tuple[int, int] = 1,
-        # padding: str = "valid",
+        stride: int | tuple[int, int] = 1,
+        padding: int | tuple[int, int] | str = 0,
         activation: str = "identity",
         kernel_initializer: str | dict[str, Any] = "xavier_normal",
         bias_initializer: str | dict[str, Any] = "zeros",
@@ -96,12 +120,11 @@ class Conv2d(Module):
         name: str = "Conv2D",
     ) -> None:
         super().__init__()
-
         self.in_channels = in_channels
         self.out_channels = out_channels
-        self.kernel_size = kernel_size
-        # self.stride = stride
-        # self.padding = padding
+        self.kernel_size = make_pair(kernel_size)
+        self.stride = make_pair(stride)
+        self._padding_spec = padding  # int, (int,int), "valid", or "same"
         self.activation = activation
         self.kernel_initializer = kernel_initializer
         self.bias_initializer = bias_initializer
@@ -117,24 +140,40 @@ class Conv2d(Module):
         self.input_shape = None
         self.output_shape = None
         self.kernel_shape = None
+        self._padding: tuple[int, int] = (0, 0)  # resolved in build()
+
+    def _resolve_padding(self, in_h: int, in_w: int) -> tuple[int, int]:
+        kh, kw = self.kernel_size
+        sh, sw = self.stride
+        p = self._padding_spec
+        if isinstance(p, str):
+            if p.lower() == "valid":
+                return (0, 0)
+            if p.lower() == "same":
+                ph = _same_padding(in_h, kh, sh)
+                pw = _same_padding(in_w, kw, sw)
+                return (ph, pw)
+            raise ValueError("padding must be int, (int,int), 'valid', or 'same'")
+        if isinstance(p, int):
+            return (p, p)
+        return make_pair(p)
 
     def build(self, input_shape: int | Shape) -> None:
         assert len(input_shape) == 4
-        _, in_channels, in_height, in_width = input_shape
-        assert in_channels == self.in_channels
+        _, in_ch, in_h, in_w = input_shape
+        assert in_ch == self.in_channels
 
-        self.input_shape = (in_channels, in_height, in_width)
-        self.output_shape = (
-            self.out_channels,
-            in_height - self.kernel_size + 1,
-            in_width - self.kernel_size + 1,
-        )
-        self.kernel_shape = (
-            self.out_channels,
-            self.in_channels,
-            self.kernel_size,
-            self.kernel_size,
-        )
+        kh, kw = self.kernel_size
+        sh, sw = self.stride
+        self._padding = self._resolve_padding(in_h, in_w)
+        ph, pw = self._padding
+
+        out_h = (in_h + 2 * ph - kh) // sh + 1
+        out_w = (in_w + 2 * pw - kw) // sw + 1
+
+        self.input_shape = (in_ch, in_h, in_w)
+        self.output_shape = (self.out_channels, out_h, out_w)
+        self.kernel_shape = (self.out_channels, self.in_channels, kh, kw)
 
         self.parameters["K"] = Tensor(self.kernel_init(self.kernel_shape))
         assert self.parameters["K"].shape == self.kernel_shape
@@ -150,26 +189,20 @@ class Conv2d(Module):
             self.build(X.shape)
         assert X.shape[1:] == self.input_shape
 
-        # Get kernel and bias
         K = self.parameters["K"]
         B = self.parameters.get("B", None)
-
-        # Compute conv2d transformation
-        output = conv2d(X, K, B)
-
-        # Compute activation
-        output = self.act_fn(output)
-
-        return output
+        output = conv2d(X, K, B, stride=self.stride, padding=self._padding)
+        return self.act_fn(output)
 
     @property
     def hyperparameters(self) -> dict[str, Any]:
         return {
             "input_shape": self.input_shape,
-            "filters": self.filters,
+            "in_channels": self.in_channels,
+            "out_channels": self.out_channels,
             "kernel_size": self.kernel_size,
             "stride": self.stride,
-            "padding": self.padding,
+            "padding": self._padding_spec,
             "activation": self.activation,
             "kernel_initializer": self.kernel_initializer,
             "bias_initializer": self.bias_initializer,

@@ -1,7 +1,12 @@
 from __future__ import annotations
 from typing import Any
 import numpy as np
-from numba import njit
+
+try:
+    from numba import njit
+except ImportError:
+    def njit(f):
+        return f  # no JIT if numba not installed
 
 from pynn.core import Array, Number, ArrayLike, DataType, Shape
 from pynn.core.primitives import *
@@ -177,8 +182,8 @@ class Tensor:
         output.add_children((self,))
 
         def reverse():
-            grad = Tensor(other * self.data.array ** (other - 1))
-            self.grad += grad * output.grad
+            grad = other * np.power(self.data, other - 1)
+            self.grad += grad * np.asarray(output.grad)
 
         output.forward = "pow"
         output.reverse = reverse

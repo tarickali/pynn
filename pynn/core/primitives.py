@@ -1,4 +1,10 @@
-from numba import njit
+try:
+    from numba import njit
+except ImportError:
+
+    def njit(f):
+        return f  # no JIT if numba not installed
+
 
 from .types import Array, Number
 

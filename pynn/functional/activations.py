@@ -21,13 +21,12 @@ def identity(x: TensorLike) -> Tensor:
     x = x if isinstance(x, Tensor) else Tensor(x)
 
     array = x.data
-    data = array
+    data = array.copy()
     output = Tensor(data)
     output.add_children((x,))
 
     def reverse():
-        grad = np.ones_like(x)
-        x.grad = grad * output.grad
+        x.grad += np.ones_like(array) * np.asarray(output.grad)
 
     output.forward = "identity"
     output.reverse = reverse

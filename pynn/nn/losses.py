@@ -62,8 +62,8 @@ class MeanSquaredError(Loss):
 class MeanAbsoluteError(Loss):
     """MeanAbsoluteError Loss
 
-    Computes the squared error between true and pred given by:
-    `mean((true - pred)**2)`
+    Computes the mean absolute error between true and pred given by:
+    `mean(|true - pred|)`.
 
     """
 

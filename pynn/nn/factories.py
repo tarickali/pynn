@@ -4,15 +4,20 @@ from pynn.nn.initializers import *
 from pynn.nn.activations import *
 
 
-def initializer_factory(initializer: str | dict[str, Any] | Initializer) -> Initializer:
+def initializer_factory(
+    initializer: str | dict[str, Any] | Initializer | None = None,
+) -> Initializer:
     """Factory function to create Initializer objects.
+
+    If initializer is None, returns RandomNormal.
 
     Parameters
     ----------
-    initializer : str | dict[str, Any] | Initializer
+    initializer : str | dict[str, Any] | Initializer | None
         If str, then represents the name of the Initializer.
         If dict, then represents the name, param dict of the Initializer.
         If Initializer, then returns the same object.
+        If None, returns RandomNormal.
 
     Returns
     -------
@@ -25,16 +30,19 @@ def initializer_factory(initializer: str | dict[str, Any] | Initializer) -> Init
 
     """
 
-    if isinstance(initializer, str):
+    if initializer is None:
+        name = "random_normal"
+        params = {}
+    elif isinstance(initializer, str):
         name = initializer
         params = {}
     elif isinstance(initializer, dict):
         name = initializer["name"]
-        params = initializer["params"]
+        params = initializer.get("params", {})
     elif isinstance(initializer, Initializer):
         return initializer
     else:
-        raise ValueError("Cannot interpret given activation for factory.")
+        raise ValueError("Cannot interpret given initializer for factory.")
 
     match name:
         case "constant":
@@ -63,15 +71,20 @@ def initializer_factory(initializer: str | dict[str, Any] | Initializer) -> Init
             raise ValueError(f"Initializer: {name} not available.")
 
 
-def activation_factory(activation: str | dict[str, Any] | Activation) -> Activation:
+def activation_factory(
+    activation: str | dict[str, Any] | Activation | None = None,
+) -> Activation:
     """Factory function to create Activation objects.
+
+    If activation is None, returns Identity.
 
     Parameters
     ----------
-    activation : str | dict[str, Any] | Activation
+    activation : str | dict[str, Any] | Activation | None
         If str, then represents the name of the Activation.
         If dict, then represents the name, param dict of the Activation.
         If Activation, then returns the same object.
+        If None, returns Identity.
 
     Returns
     -------
@@ -84,17 +97,19 @@ def activation_factory(activation: str | dict[str, Any] | Activation) -> Activat
 
     """
 
-    if isinstance(activation, str):
+    if activation is None:
+        name = "identity"
+        params = {}
+    elif isinstance(activation, str):
         name = activation
         params = {}
     elif isinstance(activation, dict):
         name = activation["name"]
-        params = activation["params"]
+        params = activation.get("params", {})
     elif isinstance(activation, Activation):
         return activation
     else:
         raise ValueError("Cannot interpret given activation for factory.")
-
     match name:
         case "affine":
             return Affine(**params)
@@ -103,7 +118,7 @@ def activation_factory(activation: str | dict[str, Any] | Activation) -> Activat
         case "identity":
             return Identity()
         case "relu":
-            return ReLU()
+            return ReLU(**params)
         case "selu":
             return SELU()
         case "sigmoid":
