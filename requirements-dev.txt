@@ -1,0 +1,16 @@
+# Install after requirements.txt for development and testing
+-r requirements.txt
+
+# Optional speedup
+numba>=0.57
+
+# Examples (regression, binary classification, MNIST data download)
+scikit-learn>=1.0
+pandas>=1.0
+
+# Testing
+pytest>=7.0
+
+# Optional: full test suite (comparisons with PyTorch/TensorFlow)
+# torch>=2.0
+# tensorflow>=2.12
