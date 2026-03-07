@@ -168,17 +168,24 @@ def softplus(x: TensorLike) -> Tensor:
 
 
 def softmax(x: TensorLike, axis: int = -1) -> Tensor:
+    """Softmax over the given axis. Default axis=-1 (last axis, e.g. classes).
+
+    Gradient: dL/dz = s * (g - sum(s*g, axis=axis, keepdims=True))
+    where s = softmax(z), g = upstream dL/ds.
+    """
     x = x if isinstance(x, Tensor) else Tensor(x)
 
     array = x.data
-    e = np.exp(array - np.max(array))
+    e = np.exp(array - np.max(array, axis=axis, keepdims=True))
     data = e / np.sum(e, axis=axis, keepdims=True)
     output = Tensor(data)
     output.add_children((x,))
 
     def reverse():
-        grad = np.ones_like(array)
-        x.grad = grad * output.grad
+        s = output.data
+        g = output.grad
+        # Jacobian: dL/dz = s * (g - sum(s*g, axis, keepdims))
+        x.grad = s * (g - np.sum(s * g, axis=axis, keepdims=True))
 
     output.forward = "softmax"
     output.reverse = reverse

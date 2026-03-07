@@ -1,3 +1,4 @@
+from typing import Literal
 from pynn.core import Tensor, Loss
 from pynn.functional.losses import *
 
@@ -50,13 +51,18 @@ class CategoricalCrossentropy(Loss):
 class MeanSquaredError(Loss):
     """MeanSquaredError Loss
 
-    Computes the squared error between true and pred given by:
-    `mean((true - pred)**2)`
+    Computes the squared error between true and pred:
+    - reduction='mean' (default): `mean((true - pred)**2)`
+    - reduction='sum': `sum((true - pred)**2)`
 
     """
 
+    def __init__(self, reduction: Literal["mean", "sum"] = "mean") -> None:
+        super().__init__()
+        self.reduction = reduction
+
     def compute(self, true: Tensor, pred: Tensor) -> Tensor:
-        return mean_squared_error(true, pred)
+        return mean_squared_error(true, pred, self.reduction)
 
 
 class MeanAbsoluteError(Loss):

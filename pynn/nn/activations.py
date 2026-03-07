@@ -145,21 +145,23 @@ class SoftPlus(Activation):
 class Softmax(Activation):
     """Softmax Activation
 
-    Computes the computetion `f(x) = exp(x) / sum(exp(x))`.
+    Computes f(x) = exp(x) / sum(exp(x)) over the given axis.
+    Default axis=-1 (last axis, e.g. class logits).
 
-    NOTE: Returns the all ones matrix with shape of input z,
-    since the categorical cross-entropy loss computetion L computes
-    the appropriate gradient of L with respect to z.
+    The gradient uses the full softmax Jacobian: dL/dz = s * (g - sum(s*g)),
+    so it is correct for any axis and any downstream loss. When the next layer
+    is Categorical Cross-Entropy, the upstream g has the form (s - y); the
+    Jacobian applied to that still yields the correct dL/dz for any axis.
 
-    NOTE: The true gradient of softmax with respect to z is a Jacobian,
-    and the code is given below:
-    s = softmax(z)
-    jacob = np.diag(s.flatten()) - np.outer(s, s)
-
-    NOTE: It is important to note that this choice limits the use of
-    the softmax activation to only the last layer of a neural network.
-
+    Parameters
+    ----------
+    axis : int, default -1
+        Axis over which to apply softmax (e.g. -1 for class dimension).
     """
 
+    def __init__(self, axis: int = -1) -> None:
+        super().__init__()
+        self.axis = axis
+
     def compute(self, x: Tensor) -> Tensor:
-        return softmax(x)
+        return softmax(x, axis=self.axis)

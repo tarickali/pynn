@@ -1,4 +1,7 @@
+from typing import Literal
+
 import numpy as np
+
 from pynn.core.constants import EPSILON
 from pynn.core import Tensor
 from pynn.functional import sigmoid, softmax
@@ -57,9 +60,20 @@ def categorical_crossentropy(true: Tensor, pred: Tensor, logits: bool = True) ->
     return output
 
 
-def mean_squared_error(true: Tensor, pred: Tensor) -> Tensor:
+def mean_squared_error(
+    true: Tensor, pred: Tensor, reduction: Literal["mean", "sum"] = "mean"
+) -> Tensor:
+    """MSE loss. reduction='mean' (default) or 'sum'.
+
+    Mininet's SquaredError is 0.5 * mean_squared_error(..., reduction='sum').
+    """
     assert true.shape == pred.shape
-    return pmath.mean((true - pred) ** 2)
+    diff_sq = (true - pred) ** 2
+    if reduction == "mean":
+        return pmath.mean(diff_sq)
+    elif reduction == "sum":
+        return pmath.sum(diff_sq)
+    raise ValueError("reduction must be 'mean' or 'sum'")
 
 
 def mean_absolute_error(true: Tensor, pred: Tensor) -> Tensor:

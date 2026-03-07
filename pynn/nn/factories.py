@@ -123,6 +123,8 @@ def activation_factory(
             return SELU()
         case "sigmoid":
             return Sigmoid()
+        case "softmax":
+            return Softmax(axis=params.get("axis", -1))
         case "softplus":
             return SoftPlus()
         case "tanh":
