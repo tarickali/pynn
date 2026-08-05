@@ -142,6 +142,45 @@ A dependency-free smoke test is also available:
 python scripts/smoke_test.py
 ```
 
+### Lint and type checking
+
+Install the tools with `pip install -e ".[dev]"`. Both are configured in
+`pyproject.toml` — the rule set is pinned explicitly rather than inherited from
+whichever ruff version happens to be installed, so results are reproducible.
+
+```bash
+ruff check .          # lint
+ruff format .         # format
+mypy                  # type check (files are configured in pyproject.toml)
+```
+
+`ruff check` and `mypy` are both clean across `pynn`, `tests`, `examples`, and
+`scripts`.
+
+---
+
+## Reproducibility
+
+Weight initialization draws from a module-level `numpy.random.Generator`, not the legacy
+global `numpy.random` functions. To make a whole model's initialization reproducible:
+
+```python
+from pynn.functional.initializers import set_seed
+
+set_seed(0)
+model = Sequential([Linear(784, 256, activation="relu"), Linear(256, 10)])
+```
+
+Individual initializers also take an explicit generator, for when you want one layer
+drawn from a separate stream:
+
+```python
+import numpy as np
+from pynn.functional.initializers import he_normal
+
+weights = he_normal((784, 256), rng=np.random.default_rng(0))
+```
+
 ---
 
 ## Verification

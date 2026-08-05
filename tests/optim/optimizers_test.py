@@ -58,7 +58,7 @@ def test_sgd_momentum():
 def test_sgd_momentum_accelerates():
     """With a constant gradient, momentum must take strictly larger steps over time."""
     trajectory = run_optimizer(SGD, learning_rate=0.1, momentum=0.9)
-    steps = -np.diff([START] + trajectory)
+    steps = -np.diff([START, *trajectory])
 
     assert np.all(np.diff(steps) > 0), f"steps did not grow: {steps}"
 
@@ -105,7 +105,7 @@ def test_sgd_weight_decay():
 
 def test_sgd_maximize_ascends():
     trajectory = run_optimizer(SGD, learning_rate=0.1, maximize=True)
-    assert np.all(np.diff([START] + trajectory) > 0)
+    assert np.all(np.diff([START, *trajectory]) > 0)
 
 
 def test_adam():
@@ -165,7 +165,7 @@ def test_rmsprop_momentum():
 def test_rmsprop_maximize_ascends():
     """maximize was accepted but silently ignored; this pins the behavior down."""
     trajectory = run_optimizer(RMSprop, learning_rate=0.01, maximize=True)
-    assert np.all(np.diff([START] + trajectory) > 0)
+    assert np.all(np.diff([START, *trajectory]) > 0)
 
 
 def test_adagrad():
@@ -255,7 +255,7 @@ def test_optimizer_reset_reproduces_trajectory(optimizer_cls):
 
 @pytest.mark.parametrize("optimizer_cls", ALL_OPTIMIZERS, ids=lambda c: c.__name__)
 def test_optimizer_handles_lazily_built_parameters(optimizer_cls):
-    """Layers build on first forward, so parameters appear after the optimizer exists."""
+    """Layers build lazily, so parameters appear after the optimizer exists."""
     model = Sequential([Linear(4, 3)])
     optimizer = optimizer_cls(model.parameters, learning_rate=0.1)
     assert model.parameters == [{}]

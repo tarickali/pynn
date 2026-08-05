@@ -1,7 +1,30 @@
 from typing import Any
-from pynn.core import Initializer, Activation
-from pynn.nn.initializers import *
-from pynn.nn.activations import *
+
+from pynn.core import Activation, Initializer
+from pynn.nn.activations import (
+    ELU,
+    SELU,
+    Affine,
+    Identity,
+    ReLU,
+    Sigmoid,
+    Softmax,
+    SoftPlus,
+    Tanh,
+)
+from pynn.nn.initializers import (
+    Constant,
+    HeNormal,
+    HeUniform,
+    LecunNormal,
+    LecunUniform,
+    Ones,
+    RandomNormal,
+    RandomUniform,
+    XavierNormal,
+    XavierUniform,
+    Zeros,
+)
 
 
 def initializer_factory(
@@ -32,7 +55,7 @@ def initializer_factory(
 
     if initializer is None:
         name = "random_normal"
-        params = {}
+        params: dict[str, Any] = {}
     elif isinstance(initializer, str):
         name = initializer
         params = {}
@@ -99,7 +122,7 @@ def activation_factory(
 
     if activation is None:
         name = "identity"
-        params = {}
+        params: dict[str, Any] = {}
     elif isinstance(activation, str):
         name = activation
         params = {}

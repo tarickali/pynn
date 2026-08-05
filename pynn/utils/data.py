@@ -1,6 +1,6 @@
 import numpy as np
 
-__all__ = ["one_hot", "get_batches"]
+__all__ = ["get_batches", "one_hot"]
 
 
 def one_hot(x: np.ndarray, k: int = 10) -> np.ndarray:

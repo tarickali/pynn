@@ -1,8 +1,8 @@
 import numpy as np
 import pytest
 
-from pynn.core import Tensor
 import pynn.core.math as pmath
+from pynn.core import Tensor
 
 torch = pytest.importorskip("torch", reason="comparison against PyTorch is optional")
 

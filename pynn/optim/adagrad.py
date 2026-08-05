@@ -1,6 +1,6 @@
 import numpy as np
 
-from pynn.core import Tensor, Optimizer
+from pynn.core import Optimizer, Tensor
 from pynn.utils.tensor import get_data_and_grad
 
 __all__ = ["Adagrad"]
@@ -33,7 +33,7 @@ class Adagrad(Optimizer):
 
     def update(self) -> None:
         t = self.time + 1
-        for params, cache in zip(self.parameters, self.cache):
+        for params, cache in zip(self.parameters, self.cache, strict=True):
             for key, param in params.items():
                 data, grad = get_data_and_grad(param)
                 g = -grad if self.maximize else grad

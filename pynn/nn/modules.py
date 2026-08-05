@@ -1,13 +1,12 @@
 from typing import Any
 
+from pynn.core import Module, Tensor
 from pynn.core.types import Shape
-from pynn.core import Tensor, Module
-from pynn.functional.modules import linear, flatten, conv2d
+from pynn.functional.modules import conv2d, flatten, linear
+from pynn.nn.factories import activation_factory, initializer_factory
 from pynn.utils.array import make_pair
 
-from pynn.nn.factories import activation_factory, initializer_factory
-
-__all__ = ["Linear", "Conv2d", "Flatten", "Activation"]
+__all__ = ["Activation", "Conv2d", "Flatten", "Linear"]
 
 
 class Linear(Module):
@@ -15,7 +14,7 @@ class Linear(Module):
 
     Shape can be specified in two ways:
     - Linear(in_features, out_features, ...) — both dimensions (PyTorch-style).
-    - Linear(out_features, ...) — only output size; in_features inferred on first forward.
+    - Linear(out_features, ...) — output size only; in_features inferred on first call.
     """
 
     def __init__(
@@ -37,7 +36,7 @@ class Linear(Module):
         else:
             raise TypeError(
                 "Linear() takes 1 or 2 positional dimension arguments "
-                "(out_features, or in_features and out_features), got %d" % len(dims)
+                f"(out_features, or in_features and out_features), got {len(dims)}"
             )
         self.activation = activation
         self.weight_initializer = weight_initializer
@@ -50,14 +49,14 @@ class Linear(Module):
         if self.include_bias:
             self.bias_init = initializer_factory(self.bias_initializer)
 
-    def build(self, input_shape: int | Shape) -> None:
+    def build(self, input_shape: Shape) -> None:
         assert len(input_shape) == 2
         if self.in_features is None:
             self.in_features = input_shape[1]
         else:
-            assert (
-                input_shape[1] == self.in_features
-            ), f"Expected in_features {self.in_features}, got {input_shape[1]}"
+            assert input_shape[1] == self.in_features, (
+                f"Expected in_features {self.in_features}, got {input_shape[1]}"
+            )
 
         self.parameters["W"] = Tensor(
             self.weight_init((self.in_features, self.out_features))
@@ -136,10 +135,10 @@ class Conv2d(Module):
         if self.include_bias:
             self.bias_init = initializer_factory(self.bias_initializer)
 
-        # Set input, output, kernel shapes to None until parameters are initialized
-        self.input_shape = None
-        self.output_shape = None
-        self.kernel_shape = None
+        # Unknown until build() sees an input; the spatial dimensions determine them.
+        self.input_shape: Shape | None = None
+        self.output_shape: Shape | None = None
+        self.kernel_shape: Shape | None = None
         self._padding: tuple[int, int] = (0, 0)  # resolved in build()
 
     def _resolve_padding(self, in_h: int, in_w: int) -> tuple[int, int]:
@@ -158,7 +157,7 @@ class Conv2d(Module):
             return (p, p)
         return make_pair(p)
 
-    def build(self, input_shape: int | Shape) -> None:
+    def build(self, input_shape: Shape) -> None:
         assert len(input_shape) == 4
         _, in_ch, in_h, in_w = input_shape
         assert in_ch == self.in_channels

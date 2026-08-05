@@ -1,9 +1,25 @@
 from __future__ import annotations
+
 from typing import Any
+
 import numpy as np
 
-from pynn.core import Array, Number, ArrayLike, DataType, Shape
-from pynn.core.primitives import *
+from pynn.core.primitives import (
+    add,
+    equal,
+    greater_than,
+    greater_than_equal,
+    less_than,
+    less_than_equal,
+    matrix_multiply,
+    multiply,
+    negate,
+    not_equal,
+    power,
+    subtract,
+    true_division,
+)
+from pynn.core.types import Array, ArrayLike, DataType, Number, Shape
 from pynn.core.utils import matrix_multiply_gradients, unbroadcast
 
 __all__ = ["Tensor"]
@@ -261,28 +277,38 @@ class Tensor:
 
     # ------------------------------------------------------------------------ #
     # Comparison Operations
+    #
+    # These compare element-wise and return a Tensor of booleans, matching numpy and
+    # PyTorch. That deliberately breaks the `object.__eq__ -> bool` contract, which is
+    # what the `override` and `misc` ignores below are for: mypy is right that this is
+    # a Liskov violation, and every array library makes the same trade.
+    #
+    # The consequence is that `if a == b:` does not mean what it looks like. Use
+    # `bool((a == b).data.all())` for an all-elements-equal test. Note that identity
+    # semantics are preserved separately by `__hash__`, which the backward pass relies
+    # on to put Tensors in a visited set.
     # ------------------------------------------------------------------------ #
-    def __eq__(self, other: Tensor | TensorLike) -> Tensor:
+    def __eq__(self, other: Tensor | TensorLike) -> Tensor:  # type: ignore[override]
         other = convert_tensor_input(other)
         return Tensor(data=equal(self.data, other.data))
 
-    def __ne__(self, other: Tensor | TensorLike) -> Tensor:
+    def __ne__(self, other: Tensor | TensorLike) -> Tensor:  # type: ignore[override]
         other = convert_tensor_input(other)
         return Tensor(data=not_equal(self.data, other.data))
 
-    def __ge__(self, other: Tensor | TensorLike) -> Tensor:
+    def __ge__(self, other: Tensor | TensorLike) -> Tensor:  # type: ignore[misc]
         other = convert_tensor_input(other)
         return Tensor(data=greater_than_equal(self.data, other.data))
 
-    def __gt__(self, other: Tensor | TensorLike) -> Tensor:
+    def __gt__(self, other: Tensor | TensorLike) -> Tensor:  # type: ignore[misc]
         other = convert_tensor_input(other)
         return Tensor(data=greater_than(self.data, other.data))
 
-    def __le__(self, other: Tensor | TensorLike) -> Tensor:
+    def __le__(self, other: Tensor | TensorLike) -> Tensor:  # type: ignore[misc]
         other = convert_tensor_input(other)
         return Tensor(data=less_than_equal(self.data, other.data))
 
-    def __lt__(self, other: Tensor | TensorLike) -> Tensor:
+    def __lt__(self, other: Tensor | TensorLike) -> Tensor:  # type: ignore[misc]
         other = convert_tensor_input(other)
         return Tensor(data=less_than(self.data, other.data))
 

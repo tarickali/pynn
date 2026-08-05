@@ -1,7 +1,8 @@
-import numpy as np
 import sys
 
-__all__ = ["EPSILON", "E", "PI", "MAXINT", "MININT"]
+import numpy as np
+
+__all__ = ["EPSILON", "MAXINT", "MININT", "PI", "E"]
 
 EPSILON = np.finfo(float).eps
 E = np.e

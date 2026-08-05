@@ -7,7 +7,7 @@ def main():
         import numpy as np
         import pandas as pd
         from sklearn.datasets import fetch_openml
-    except ImportError as e:
+    except ImportError:
         print("Install dependencies: pip install numpy pandas scikit-learn")
         sys.exit(1)
 

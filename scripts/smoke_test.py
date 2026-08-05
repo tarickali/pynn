@@ -1,4 +1,5 @@
 import sys
+
 import numpy as np
 
 # Add project root so "pynn" package is importable
@@ -11,9 +12,9 @@ def main():
     from pynn.nn.losses import MeanSquaredError
     from pynn.optim import SGD
 
-    np.random.seed(42)
-    X = np.random.randn(8, 4).astype(np.float64)
-    y = np.random.randn(8, 1).astype(np.float64)
+    rng = np.random.default_rng(42)
+    X = rng.standard_normal((8, 4))
+    y = rng.standard_normal((8, 1))
 
     model = Sequential(
         [
@@ -38,9 +39,9 @@ def main():
     loss2 = loss_fn(y_t, pred2)
     loss_val_after = float(np.asarray(loss2.data).flat[0])
 
-    assert (
-        loss_val_after <= loss_val_before + 1e-5
-    ), "Loss should decrease or stay similar after a step"
+    assert loss_val_after <= loss_val_before + 1e-5, (
+        "Loss should decrease or stay similar after a step"
+    )
     print("Smoke test passed: forward, backward, and optimizer step OK.")
 
 

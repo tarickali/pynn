@@ -1,20 +1,21 @@
 import numpy as np
-from pynn.core.types import Array, Number
+
 from pynn.core import Tensor
 from pynn.core.numeric import stable_sigmoid
+from pynn.core.types import Array, Number
 
 TensorLike = Tensor | Array | Number
 
 __all__ = [
-    "identity",
     "affine",
-    "relu",
-    "sigmoid",
-    "tanh",
     "elu",
+    "identity",
+    "relu",
     "selu",
-    "softplus",
+    "sigmoid",
     "softmax",
+    "softplus",
+    "tanh",
 ]
 
 

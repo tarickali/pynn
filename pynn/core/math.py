@@ -1,11 +1,10 @@
 import numpy as np
 
+from .constants import EPSILON
 from .tensor import Tensor
 from .types import Array, Number
-from .constants import EPSILON
 
-
-__all__ = ["abs", "sum", "mean", "exp", "log"]
+__all__ = ["abs", "exp", "log", "mean", "sum"]
 
 
 TensorLike = Tensor | Array | Number

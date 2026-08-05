@@ -4,10 +4,10 @@ import numpy as np
 from sklearn.datasets import make_regression
 
 from pynn.core import Tensor
-from pynn.utils.data import get_batches
 from pynn.nn import Linear, Sequential
 from pynn.nn.losses import MeanSquaredError
 from pynn.optim import SGD
+from pynn.utils.data import get_batches
 
 
 def regression():

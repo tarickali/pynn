@@ -1,17 +1,13 @@
 import numpy as np
+
 from pynn.core import Tensor
 from pynn.utils.array import pad_for_conv
 
-__all__ = ["linear", "flatten", "conv2d"]
+__all__ = ["conv2d", "flatten", "linear"]
 
 
 def linear(X: Tensor, W: Tensor, b: Tensor | None) -> Tensor:
-    # Compute linear transformation
-    if b is None:
-        Z = X @ W
-    else:
-        Z = X @ W + b
-    return Z
+    return X @ W if b is None else X @ W + b
 
 
 def flatten(x: Tensor) -> Tensor:
@@ -59,7 +55,7 @@ def conv2d(
         Output tensor of shape (batch, out_ch, out_h, out_w).
     """
     batch_size = X.shape[0]
-    out_ch, in_ch, kh, kw = K.shape
+    out_ch, _, kh, kw = K.shape
     _, in_h, in_w = X.shape[1:]
     sh, sw = stride
     ph, pw = padding
@@ -73,7 +69,7 @@ def conv2d(
     out_w = (padded_w - kw) // sw + 1
     output_shape = (out_ch, out_h, out_w)
 
-    data = np.zeros((batch_size,) + output_shape, dtype=X_arr.dtype)
+    data = np.zeros((batch_size, *output_shape), dtype=X_arr.dtype)
     K_arr = K.data
 
     for oh in range(out_h):

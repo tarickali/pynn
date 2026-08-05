@@ -1,7 +1,7 @@
-from typing import Any
 from abc import ABC, abstractmethod
+from typing import Any
 
-from pynn.core import Tensor
+from pynn.core.tensor import Tensor
 
 __all__ = ["Model"]
 

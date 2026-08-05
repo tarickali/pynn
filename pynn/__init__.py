@@ -14,18 +14,18 @@ Usage (PyTorch-style):
     optimizer = SGD(model.parameters, learning_rate=0.01)
 """
 
-from pynn.core import Tensor, Module, Model, Loss
-from pynn.optim import Optimizer, SGD, Adam, RMSprop, Adagrad, Adadelta
+from pynn.core import Loss, Model, Module, Tensor
+from pynn.optim import SGD, Adadelta, Adagrad, Adam, Optimizer, RMSprop
 
 __all__ = [
-    "Tensor",
-    "Module",
-    "Model",
-    "Loss",
-    "Optimizer",
     "SGD",
-    "Adam",
-    "RMSprop",
-    "Adagrad",
     "Adadelta",
+    "Adagrad",
+    "Adam",
+    "Loss",
+    "Model",
+    "Module",
+    "Optimizer",
+    "RMSprop",
+    "Tensor",
 ]

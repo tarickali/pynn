@@ -24,11 +24,6 @@ from pynn.nn.losses import MeanSquaredError
 from pynn.verify import check_gradients
 
 
-@pytest.fixture
-def rng():
-    return np.random.default_rng(20240605)
-
-
 def assert_gradients(fn, inputs, **kwargs):
     result = check_gradients(fn, inputs, **kwargs)
     assert result.passed, f"\n{result}"

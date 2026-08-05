@@ -2,16 +2,16 @@ from typing import Literal
 
 import numpy as np
 
-from pynn.core.constants import EPSILON
-from pynn.core import Tensor
-from pynn.core.numeric import stable_sigmoid
 import pynn.core.math as pmath
+from pynn.core import Tensor
+from pynn.core.constants import EPSILON
+from pynn.core.numeric import stable_sigmoid
 
 __all__ = [
     "binary_crossentropy",
     "categorical_crossentropy",
-    "mean_squared_error",
     "mean_absolute_error",
+    "mean_squared_error",
 ]
 
 

@@ -74,7 +74,7 @@ def check_autodiff() -> CheckReport:
             row.tolist() == [0.0, 1.0, 2.0, 3.0]
             and np.asarray(tensor[0]).tolist() == [0.0] * 4,
         )
-    except Exception as error:  # noqa: BLE001 - reported, not swallowed
+    except Exception as error:
         report.add(
             "Tensor supports indexing and assignment",
             False,
@@ -205,7 +205,7 @@ def check_optimizers() -> CheckReport:
         f"got {np.round(actual, 5).tolist()}",
     )
 
-    step_sizes = -np.diff([start] + actual)
+    step_sizes = -np.diff([start, *actual])
     report.add(
         "SGD momentum accelerates under a constant gradient",
         bool(np.all(np.diff(step_sizes) > 0)),
@@ -284,7 +284,7 @@ def check_optimizers() -> CheckReport:
         ascending = _trajectory(optimizer_cls, learning_rate=0.01, maximize=True)
         report.add(
             f"{name} honors maximize",
-            bool(np.all(np.diff([start] + ascending) > 0)),
+            bool(np.all(np.diff([start, *ascending]) > 0)),
         )
 
         # Layers build their parameters on the first forward pass, so the optimizer
@@ -335,7 +335,7 @@ def check_api() -> CheckReport:
         try:
             activation = activation_factory(name)
             report.add(f"activation_factory({name!r})", activation is not None)
-        except Exception as error:  # noqa: BLE001 - reported, not swallowed
+        except Exception as error:
             report.add(
                 f"activation_factory({name!r})",
                 False,
@@ -349,7 +349,7 @@ def check_api() -> CheckReport:
             report.add(
                 f"initializer_factory({name!r})", shape == (4, 3), f"shape {shape}"
             )
-        except Exception as error:  # noqa: BLE001 - reported, not swallowed
+        except Exception as error:
             report.add(
                 f"initializer_factory({name!r})",
                 False,
@@ -363,7 +363,7 @@ def check_api() -> CheckReport:
             report.add(
                 f"initializer_factory dict form for {name!r}", initializer is not None
             )
-        except Exception as error:  # noqa: BLE001 - reported, not swallowed
+        except Exception as error:
             report.add(
                 f"initializer_factory dict form for {name!r}",
                 False,

@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 
-from pynn.core.types import Shape
 from pynn.core.tensor import Tensor
+from pynn.core.types import Shape
 
 __all__ = ["Initializer"]
 

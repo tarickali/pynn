@@ -1,16 +1,26 @@
-from pynn.core import Tensor, Activation
-from pynn.functional.activations import *
+from pynn.core import Activation, Tensor
+from pynn.functional.activations import (
+    affine,
+    elu,
+    identity,
+    relu,
+    selu,
+    sigmoid,
+    softmax,
+    softplus,
+    tanh,
+)
 
 __all__ = [
-    "Identity",
-    "Affine",
-    "ReLU",
-    "Sigmoid",
-    "Tanh",
     "ELU",
     "SELU",
+    "Affine",
+    "Identity",
+    "ReLU",
+    "Sigmoid",
     "SoftPlus",
     "Softmax",
+    "Tanh",
 ]
 
 

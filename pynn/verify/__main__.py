@@ -18,7 +18,9 @@ SUITES = {
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m pynn.verify",
-        description="Verify a PyNN installation: gradients, numerical stability, invariants.",
+        description=(
+            "Verify a PyNN installation: gradients, numerical stability, invariants."
+        ),
     )
     parser.add_argument(
         "suites",

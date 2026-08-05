@@ -1,8 +1,8 @@
-from typing import Any
 from abc import ABC, abstractmethod
+from typing import Any
 
+from pynn.core.tensor import Tensor
 from pynn.core.types import Shape
-from pynn.core import Tensor
 
 __all__ = ["Module"]
 
@@ -29,9 +29,9 @@ class Module(ABC):
         """
         raise NotImplementedError
 
-    def build(self, input_shape: int | Shape) -> None:
+    def build(self, input_shape: Shape) -> None:
         """Build the Module parameters based on the given input shape."""
-        return None
+        return
 
     def zero_grad(self) -> None:
         """Clear the gradients for each parameter in the Module."""

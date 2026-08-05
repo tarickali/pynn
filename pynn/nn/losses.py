@@ -1,12 +1,18 @@
 from typing import Literal
-from pynn.core import Tensor, Loss
-from pynn.functional.losses import *
+
+from pynn.core import Loss, Tensor
+from pynn.functional.losses import (
+    binary_crossentropy,
+    categorical_crossentropy,
+    mean_absolute_error,
+    mean_squared_error,
+)
 
 __all__ = [
     "BinaryCrossentropy",
     "CategoricalCrossentropy",
-    "MeanSquaredError",
     "MeanAbsoluteError",
+    "MeanSquaredError",
 ]
 
 

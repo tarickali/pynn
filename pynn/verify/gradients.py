@@ -87,7 +87,8 @@ class GradCheckResult:
     def __str__(self) -> str:
         status = "PASSED" if self.passed else "FAILED"
         lines = [
-            f"gradient check {status} (max relative error {self.max_relative_error:.3e})"
+            f"gradient check {status} "
+            f"(max relative error {self.max_relative_error:.3e})"
         ]
         for check in self.inputs:
             mark = "ok" if check.passed else "FAIL"
@@ -214,7 +215,7 @@ def check_gradients(
     numerical = numerical_gradient(fn, tensors, eps=eps)
 
     result = GradCheckResult()
-    for index, (a, n) in enumerate(zip(analytic, numerical)):
+    for index, (a, n) in enumerate(zip(analytic, numerical, strict=True)):
         if a.shape != n.shape:
             raise ValueError(
                 f"input {index}: autodiff produced a gradient of shape {a.shape} "
@@ -582,7 +583,7 @@ def check_all_gradients(seed: int = 20240605, rtol: float = 1e-5) -> CheckReport
     for name, fn, inputs in _gradient_cases(seed):
         try:
             result = check_gradients(fn, inputs, rtol=rtol)
-        except Exception as error:  # noqa: BLE001 - reported, not swallowed
+        except Exception as error:
             report.add(name, False, f"raised {type(error).__name__}: {error}")
         else:
             report.add(

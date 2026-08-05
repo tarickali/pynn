@@ -24,6 +24,9 @@ mnist = [
 ]
 dev = [
     "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "ruff>=0.6",
+    "mypy>=1.11",
 ]
 test = [
     "pytest>=7.0",
@@ -42,6 +45,46 @@ all = [
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["pynn*"]
+
+[tool.ruff]
+# Pinned explicitly: ruff's default rule set varies between releases, so relying on it
+# makes `ruff check` results depend on which version happens to be installed.
+line-length = 88
+target-version = "py310"
+
+[tool.ruff.lint]
+select = [
+    "F",    # pyflakes
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "I",    # import sorting
+    "UP",   # pyupgrade
+    "B",    # bugbear
+    "C4",   # comprehensions
+    "SIM",  # simplify
+    "RET",  # return
+    "NPY",  # numpy-specific
+    "RUF",  # ruff-specific
+]
+ignore = [
+    # X, W, B, K, O for matrices and tensors is the convention this domain reads in,
+    # and matches the notation in the docstrings.
+    "E741",
+]
+
+[tool.mypy]
+python_version = "3.10"
+files = ["pynn"]
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_unreachable = true
+no_implicit_optional = true
+check_untyped_defs = true
+
+# numba is an optional extra and ships no stubs.
+[[tool.mypy.overrides]]
+module = ["numba.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

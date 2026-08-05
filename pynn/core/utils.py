@@ -97,7 +97,7 @@ def matrix_multiply_gradients(
     # Any dropped axis had length 1, so the element count is unchanged.
     batch_shape = np.broadcast_shapes(left_2d.shape[:-2], right_2d.shape[:-2])
     gradient_2d = gradient.reshape(
-        batch_shape + (left_2d.shape[-2], right_2d.shape[-1])
+        (*batch_shape, left_2d.shape[-2], right_2d.shape[-1])
     )
 
     left_gradient = gradient_2d @ np.swapaxes(right_2d, -1, -2)

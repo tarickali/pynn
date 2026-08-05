@@ -1,6 +1,6 @@
 from typing import Any
 
-from pynn.core import Tensor, Model, Module
+from pynn.core import Model, Module, Tensor
 
 __all__ = ["Sequential"]
 

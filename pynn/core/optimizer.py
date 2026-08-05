@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 
-from pynn.core import Tensor
+from pynn.core.tensor import Tensor
 
 __all__ = ["Optimizer"]
 

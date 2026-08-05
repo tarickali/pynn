@@ -5,11 +5,11 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 
 from pynn.core import Tensor
-from pynn.utils.data import one_hot, get_batches
 from pynn.nn import Linear, Sequential
-from pynn.nn.losses import CategoricalCrossentropy
 from pynn.nn.activations import Softmax
+from pynn.nn.losses import CategoricalCrossentropy
 from pynn.optim import SGD
+from pynn.utils.data import get_batches, one_hot
 
 
 def generate_data(data_path: str = "examples/data/mnist/train.csv"):
@@ -18,12 +18,12 @@ def generate_data(data_path: str = "examples/data/mnist/train.csv"):
         train_df = pd.read_csv(data_path)
     except FileNotFoundError:
         print(f"MNIST data not found at {data_path}. Using synthetic data for demo.")
-        np.random.seed(42)
+        rng = np.random.default_rng(42)
         # Low-dim synthetic task: easy to learn so the demo shows clear progress
         input_dim = 50
         n_samples = 1000
-        X = np.random.randn(n_samples, input_dim).astype(np.float64) * 0.5
-        W_fake = np.random.randn(input_dim, 10).astype(np.float64)
+        X = rng.standard_normal((n_samples, input_dim)) * 0.5
+        W_fake = rng.standard_normal((input_dim, 10))
         logits = X @ W_fake
         y_idx = np.argmax(logits, axis=1)
         y = one_hot(y_idx, 10)

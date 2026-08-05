@@ -1,9 +1,9 @@
 import numpy as np
 import pytest
 
-from pynn.core import Tensor
 import pynn.functional as F
 import pynn.nn.losses as L
+from pynn.core import Tensor
 
 torch = pytest.importorskip("torch", reason="comparison against PyTorch is optional")
 import torch.nn.functional as G  # noqa: E402

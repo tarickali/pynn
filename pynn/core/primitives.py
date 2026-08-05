@@ -10,19 +10,19 @@ from .types import Array, Number
 
 __all__ = [
     "add",
-    "subtract",
-    "multiply",
-    "matrix_multiply",
-    "true_division",
-    "power",
-    "negate",
-    "transpose",
     "equal",
-    "not_equal",
-    "greater_than_equal",
     "greater_than",
-    "less_than_equal",
+    "greater_than_equal",
     "less_than",
+    "less_than_equal",
+    "matrix_multiply",
+    "multiply",
+    "negate",
+    "not_equal",
+    "power",
+    "subtract",
+    "transpose",
+    "true_division",
 ]
 
 

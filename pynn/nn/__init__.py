@@ -1,23 +1,23 @@
-from pynn.core import Module, Model
-from pynn.nn.modules import Linear, Conv2d, Flatten, Activation
-from pynn.nn.models import Sequential
+from pynn.core import Model, Module
 from pynn.nn.activations import (
-    Identity,
-    Affine,
-    ReLU,
-    Sigmoid,
-    Tanh,
     ELU,
     SELU,
-    SoftPlus,
+    Affine,
+    Identity,
+    ReLU,
+    Sigmoid,
     Softmax,
+    SoftPlus,
+    Tanh,
 )
 from pynn.nn.losses import (
     BinaryCrossentropy,
     CategoricalCrossentropy,
-    MeanSquaredError,
     MeanAbsoluteError,
+    MeanSquaredError,
 )
+from pynn.nn.models import Sequential
+from pynn.nn.modules import Activation, Conv2d, Flatten, Linear
 
 # PyTorch-style aliases
 BCELoss = BinaryCrossentropy
@@ -26,33 +26,33 @@ MSELoss = MeanSquaredError
 L1Loss = MeanAbsoluteError
 
 __all__ = [
-    # Core
-    "Module",
-    "Model",
-    # Layers / containers
-    "Linear",
-    "Conv2d",
-    "Flatten",
-    "Activation",
-    "Sequential",
-    # Activations
-    "Identity",
-    "Affine",
-    "ReLU",
-    "Sigmoid",
-    "Tanh",
-    "Softmax",
     "ELU",
     "SELU",
-    "SoftPlus",
+    "Activation",
+    "Affine",
+    # PyTorch-style loss aliases
+    "BCELoss",
     # Losses
     "BinaryCrossentropy",
     "CategoricalCrossentropy",
-    "MeanSquaredError",
-    "MeanAbsoluteError",
-    # PyTorch-style loss aliases
-    "BCELoss",
+    "Conv2d",
     "CrossEntropyLoss",
-    "MSELoss",
+    "Flatten",
+    # Activations
+    "Identity",
     "L1Loss",
+    # Layers / containers
+    "Linear",
+    "MSELoss",
+    "MeanAbsoluteError",
+    "MeanSquaredError",
+    "Model",
+    # Core
+    "Module",
+    "ReLU",
+    "Sequential",
+    "Sigmoid",
+    "SoftPlus",
+    "Softmax",
+    "Tanh",
 ]
