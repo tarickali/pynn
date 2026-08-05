@@ -35,15 +35,12 @@ class RMSprop(Optimizer):
         ]
 
     def update(self) -> None:
-        L = len(self.parameters)
-        t = self.time + 1
-        for l in range(L):
-            params = self.parameters[l]
-            cache = self.cache[l]
+        for params, cache in zip(self.parameters, self.cache):
             for key, param in params.items():
-                data, g = get_data_and_grad(param)
+                data, grad = get_data_and_grad(param)
+                g = -grad if self.maximize else grad
                 g = g + self.weight_decay * data
-                if t == 1:
+                if key not in cache["square_average"]:
                     cache["square_average"][key] = np.zeros_like(g)
                     cache["buffer"][key] = np.zeros_like(g)
                     cache["g_av"][key] = np.zeros_like(g)

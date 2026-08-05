@@ -1,19 +1,22 @@
 import numpy as np
-import torch
-import torch.nn.functional as G
+import pytest
+
 from pynn.core import Tensor
 import pynn.functional as F
 import pynn.nn.losses as L
 
-from tensorflow import keras
+torch = pytest.importorskip("torch", reason="comparison against PyTorch is optional")
+import torch.nn.functional as G  # noqa: E402
+
+pytestmark = pytest.mark.external
 
 
-def get_data(input_dim: int = 32, output_dim: int = 1):
-    np.random.seed()
-    x = np.random.randn(32, input_dim)
-    W = np.random.randn(input_dim, output_dim)
+def get_data(input_dim: int = 32, output_dim: int = 1, seed: int = 0):
+    rng = np.random.default_rng(seed)
+    x = rng.standard_normal((32, input_dim))
+    W = rng.standard_normal((input_dim, output_dim))
     b = np.zeros(output_dim)
-    y = np.random.randn(32, output_dim)
+    y = rng.standard_normal((32, output_dim))
 
     ptensor_W = Tensor(W)
     ptensor_x = Tensor(x)
@@ -50,9 +53,11 @@ def test_regression_losses():
     torch_loss = torch.nn.L1Loss()(torch.Tensor(y), torch_o)
     torch_loss.backward()
 
-    for i, (ptensor, tensor) in enumerate(
-        [(ptensor_W, torch_W), (ptensor_x, torch_x), (ptensor_b, torch_b)]
-    ):
+    for ptensor, tensor in [
+        (ptensor_W, torch_W),
+        (ptensor_x, torch_x),
+        (ptensor_b, torch_b),
+    ]:
         assert np.allclose(ptensor.data, tensor.data.numpy(), atol=1e-6)
         assert np.allclose(ptensor.grad, tensor.grad.numpy(), atol=1e-6)
 
@@ -62,9 +67,9 @@ def test_binary_loss():
         (ptensor_x, ptensor_W, ptensor_b, ptensor_z),
         (torch_x, torch_W, torch_b, torch_z),
         y,
-    ) = get_data(32, 1)
+    ) = get_data(32, 1, seed=1)
 
-    y = np.random.randint(0, 2, (32, 1))
+    y = np.random.default_rng(1).integers(0, 2, (32, 1)).astype(np.float64)
 
     ptensor_o = F.sigmoid(ptensor_z)
     ptensor_loss = L.BinaryCrossentropy(logits=False)(Tensor(y), ptensor_o)
@@ -73,15 +78,35 @@ def test_binary_loss():
     torch_o = G.sigmoid(torch_z)
     torch_o.retain_grad()
     torch_loss = torch.nn.BCELoss()(torch_o, torch.Tensor(y))
-    torch_loss.retain_grad()
     torch_loss.backward()
 
-    keras_loss = keras.losses.BinaryCrossentropy(False)(y, ptensor_o.data)
-
-    for i, (ptensor, tensor) in enumerate(
-        [(ptensor_W, torch_W), (ptensor_x, torch_x), (ptensor_b, torch_b)]
-    ):
+    for ptensor, tensor in [
+        (ptensor_W, torch_W),
+        (ptensor_x, torch_x),
+        (ptensor_b, torch_b),
+    ]:
         assert np.allclose(ptensor.data, tensor.data.numpy(), atol=1e-6)
+        assert np.allclose(ptensor.grad, tensor.grad.numpy(), atol=1e-6)
+
+
+def test_binary_loss_from_logits():
+    (
+        (ptensor_x, ptensor_W, ptensor_b, ptensor_z),
+        (torch_x, torch_W, torch_b, torch_z),
+        y,
+    ) = get_data(32, 1, seed=2)
+
+    y = np.random.default_rng(2).integers(0, 2, (32, 1)).astype(np.float64)
+
+    L.BinaryCrossentropy(logits=True)(Tensor(y), ptensor_z).backward()
+
+    torch.nn.BCEWithLogitsLoss()(torch_z, torch.Tensor(y)).backward()
+
+    for ptensor, tensor in [
+        (ptensor_W, torch_W),
+        (ptensor_x, torch_x),
+        (ptensor_b, torch_b),
+    ]:
         assert np.allclose(ptensor.grad, tensor.grad.numpy(), atol=1e-6)
 
 
@@ -90,22 +115,39 @@ def test_multi_loss():
         (ptensor_x, ptensor_W, ptensor_b, ptensor_z),
         (torch_x, torch_W, torch_b, torch_z),
         y,
-    ) = get_data(32, 10)
+    ) = get_data(32, 10, seed=3)
 
-    y = np.eye(10)[np.random.choice(10, 32)]
+    y = np.eye(10)[np.random.default_rng(3).choice(10, 32)]
 
-    ptensor_o = ptensor_z
-    ptensor_loss = L.CategoricalCrossentropy(logits=True)(Tensor(y), ptensor_o)
-    ptensor_loss.backward()
+    L.CategoricalCrossentropy(logits=True)(Tensor(y), ptensor_z).backward()
 
-    torch_o = torch_z
-    torch_o.retain_grad()
-    torch_loss = torch.nn.CrossEntropyLoss()(torch_o, torch.Tensor(y))
-    torch_loss.retain_grad()
-    torch_loss.backward()
+    torch.nn.CrossEntropyLoss()(torch_z, torch.Tensor(y)).backward()
 
-    for i, (ptensor, tensor) in enumerate(
-        [(ptensor_W, torch_W), (ptensor_x, torch_x), (ptensor_b, torch_b)]
-    ):
+    for ptensor, tensor in [
+        (ptensor_W, torch_W),
+        (ptensor_x, torch_x),
+        (ptensor_b, torch_b),
+    ]:
         assert np.allclose(ptensor.data, tensor.data.numpy(), atol=1e-6)
+        assert np.allclose(ptensor.grad, tensor.grad.numpy(), atol=1e-6)
+
+
+def test_multi_loss_from_probabilities():
+    (
+        (ptensor_x, ptensor_W, ptensor_b, ptensor_z),
+        (torch_x, torch_W, torch_b, torch_z),
+        y,
+    ) = get_data(32, 10, seed=4)
+
+    y = np.eye(10)[np.random.default_rng(4).choice(10, 32)]
+
+    L.CategoricalCrossentropy(logits=False)(Tensor(y), F.softmax(ptensor_z)).backward()
+
+    torch.nn.CrossEntropyLoss()(torch_z, torch.Tensor(y)).backward()
+
+    for ptensor, tensor in [
+        (ptensor_W, torch_W),
+        (ptensor_x, torch_x),
+        (ptensor_b, torch_b),
+    ]:
         assert np.allclose(ptensor.grad, tensor.grad.numpy(), atol=1e-6)

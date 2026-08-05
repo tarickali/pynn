@@ -32,28 +32,21 @@ class Adagrad(Optimizer):
         ]
 
     def update(self) -> None:
-        L = len(self.parameters)
         t = self.time + 1
-        for l in range(L):
-            params = self.parameters[l]
-            cache = self.cache[l]
+        for params, cache in zip(self.parameters, self.cache):
             for key, param in params.items():
-                data, g = get_data_and_grad(param)
+                data, grad = get_data_and_grad(param)
+                g = -grad if self.maximize else grad
                 g = g + self.weight_decay * data
                 lr = self.learning_rate / (1 + (t - 1) * self.learning_rate_decay)
-                if t == 1:
+                if key not in cache["sum"]:
                     cache["sum"][key] = np.full_like(
                         data, self.initial_accumulator_value
                     )
                 cache["sum"][key] = cache["sum"][key] + (g**2)
-                if self.maximize:
-                    param.data = param.data + lr * g / (
-                        np.sqrt(cache["sum"][key]) + self.eps
-                    )
-                else:
-                    param.data = param.data - lr * g / (
-                        np.sqrt(cache["sum"][key]) + self.eps
-                    )
+                param.data = param.data - lr * g / (
+                    np.sqrt(cache["sum"][key]) + self.eps
+                )
         self.increment()
 
     def reset(self) -> None:

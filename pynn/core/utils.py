@@ -3,86 +3,112 @@ import numpy as np
 from pynn.core.types import Array, Shape
 
 __all__ = [
-    "expand_array",
-    "shrink_array",
+    "matrix_multiply_gradients",
+    "unbroadcast",
 ]
 
 
-# TODO: FIXME: Fix np.prod issue with njit
-# @njit
-def expand_array(array: Array, shape: Shape) -> Array:
-    """Expand the shape of an array to a broadcastable shape.
+def unbroadcast(gradient: Array, shape: Shape) -> Array:
+    """Reduce a gradient computed at broadcast shape back to an operand's shape.
+
+    When NumPy broadcasts an operand during the forward pass, it implicitly copies
+    that operand along the broadcast axes. The gradient of a copy is a sum, so the
+    reverse pass must sum the incoming gradient over exactly those axes.
+
+    NumPy broadcasting aligns shapes from the right and treats missing leading axes
+    and axes of length 1 as broadcastable, so this reduction has two parts: sum away
+    the leading axes the operand never had, then sum (keeping dimensions) the axes
+    where the operand had length 1.
 
     Parameters
     ----------
-    array : Array
+    gradient : Array
+        Gradient with respect to the broadcast result.
     shape : Shape
+        Shape of the original operand.
 
     Returns
     -------
     Array
+        Gradient with respect to the operand, of shape ``shape``.
 
+    Examples
+    --------
+    >>> unbroadcast(np.ones((4, 3)), (3,)).tolist()
+    [4.0, 4.0, 4.0]
+    >>> unbroadcast(np.ones((4, 3)), (1, 3)).tolist()
+    [[4.0, 4.0, 4.0]]
     """
-    # TODO: FIXME: Fix np.prod issue with njit
 
-    output = array
-    # If the shapes already align, do nothing
-    if output.shape != shape:
-        # If the size of the data is the same as the shape, then just reshape
-        if output.size == np.prod(shape):
-            output = np.reshape(output, shape)
-        # Otherwise, try to broadcast the data to the shape
-        # Do nothing if it fails
-        else:
-            try:
-                output = np.array(np.broadcast_to(output, shape))
-            except:
-                pass
+    if gradient.shape == shape:
+        return gradient
 
-    return output
+    leading = gradient.ndim - len(shape)
+    if leading > 0:
+        gradient = gradient.sum(axis=tuple(range(leading)))
+
+    axes = tuple(
+        axis
+        for axis, size in enumerate(shape)
+        if size == 1 and gradient.shape[axis] != 1
+    )
+    if axes:
+        gradient = gradient.sum(axis=axes, keepdims=True)
+
+    return gradient.reshape(shape)
 
 
-# TODO: FIXME: Fix np.prod issue with njit
-# @njit
-def shrink_array(array: Array, shape: Shape) -> Array:
-    """Shrink the shape of a array from a broadcastable shape.
+def matrix_multiply_gradients(
+    gradient: Array, left: Array, right: Array
+) -> tuple[Array, Array]:
+    """Gradients of ``left @ right`` with respect to each operand.
+
+    For 2-D operands this is just ``gradient @ right.T`` and ``left.T @ gradient``.
+    The complications are what ``np.matmul`` special-cases: a 1-D operand is promoted
+    to a matrix for the multiply and the promoted axis is then dropped from the result,
+    and leading axes are batched with ordinary broadcasting.
+
+    Both are handled by promoting the operands to at least 2-D, reshaping the gradient
+    to the promoted output shape, applying the matrix rule over the last two axes, and
+    then undoing each adjustment in turn: a promoted axis is squeezed out (it was never
+    a real axis) whereas a broadcast batch axis is summed over.
 
     Parameters
     ----------
-    array : Array
-    shape : Shape
+    gradient : Array
+        Gradient with respect to ``left @ right``.
+    left, right : Array
+        Forward-pass operands.
 
     Returns
     -------
-    Array
-
+    tuple[Array, Array]
+        Gradients with respect to ``left`` and ``right``, matching their shapes.
     """
 
-    output = array
-    # If the shapes already align, do nothing
-    if output.shape != shape:
-        # If the size of the data is the same as the shape, then just reshape
-        if output.size == np.prod(shape):
-            output = np.reshape(output, shape)
-        else:
-            # If the broadcastable shape is a scalar, then take the full mean
-            if len(shape) < 1:
-                output = np.sum(output).reshape(shape)
-            # Otherwise, try to broadcast the data to the shape
-            # Do nothing if it fails
-            else:
-                try:
-                    broad_shape = np.broadcast_shapes(output.shape, shape)
-                except:
-                    pass
-                else:
-                    # Get intermediate broadcast shape according to numpy broadcasting rules
-                    inter_shape = [1] * (len(broad_shape) - len(shape)) + list(shape)
-                    # Get the axis indices that are not the same
-                    axes = []
-                    for i in range(len(broad_shape) - 1, -1, -1):
-                        if output.shape[i] != inter_shape[i]:
-                            axes.append(i)
-                    # Take the mean across the axes that are not the same to collect values
-                    output = np.sum(output, axis=tuple(axes)).reshape(shape)
-    return output
+    left_is_vector = left.ndim == 1
+    right_is_vector = right.ndim == 1
+
+    # Promote vectors: a leading vector becomes a row, a trailing one becomes a column.
+    left_2d = left[np.newaxis, :] if left_is_vector else left
+    right_2d = right[:, np.newaxis] if right_is_vector else right
+
+    # Rebuild the shape the product would have had without matmul's axis dropping.
+    # Any dropped axis had length 1, so the element count is unchanged.
+    batch_shape = np.broadcast_shapes(left_2d.shape[:-2], right_2d.shape[:-2])
+    gradient_2d = gradient.reshape(
+        batch_shape + (left_2d.shape[-2], right_2d.shape[-1])
+    )
+
+    left_gradient = gradient_2d @ np.swapaxes(right_2d, -1, -2)
+    right_gradient = np.swapaxes(left_2d, -1, -2) @ gradient_2d
+
+    if left_is_vector:
+        left_gradient = np.squeeze(left_gradient, axis=-2)
+    if right_is_vector:
+        right_gradient = np.squeeze(right_gradient, axis=-1)
+
+    return (
+        unbroadcast(left_gradient, left.shape),
+        unbroadcast(right_gradient, right.shape),
+    )

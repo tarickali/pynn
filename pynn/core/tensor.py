@@ -2,15 +2,9 @@ from __future__ import annotations
 from typing import Any
 import numpy as np
 
-try:
-    from numba import njit
-except ImportError:
-    def njit(f):
-        return f  # no JIT if numba not installed
-
 from pynn.core import Array, Number, ArrayLike, DataType, Shape
 from pynn.core.primitives import *
-from pynn.core.utils import expand_array, shrink_array
+from pynn.core.utils import matrix_multiply_gradients, unbroadcast
 
 __all__ = ["Tensor"]
 
@@ -23,10 +17,10 @@ class Tensor:
         self.data: Array = np.array(data, dtype=dtype)
         self.grad: Array = np.zeros_like(self.data, dtype=np.float64)
 
-        self.forward: str = None
+        self.forward: str | None = None
         self.reverse = lambda: None
 
-        self.children: tuple[Tensor] = ()
+        self.children: tuple[Tensor, ...] = ()
         self.trainable = True
 
     # TODO: Should I have cast be inplace?
@@ -46,34 +40,96 @@ class Tensor:
     def add_children(self, tensors: tuple[Tensor, ...]) -> None:
         self.children += tensors
 
-    def backward(self) -> None:
-        order = list[Tensor]()
-        visited = set[Tensor]()
+    def backward(self, gradient: Array | Number | None = None) -> None:
+        """Accumulate gradients into every tensor this one was computed from.
 
-        def build(x: Tensor) -> None:
-            if x not in visited:
-                visited.add(x)
-                for child in x.children:
-                    build(child)
-                order.append(x)
+        Gradients are added to any already present, so call ``zero_grad`` between
+        optimization steps.
 
-        build(self)
+        Parameters
+        ----------
+        gradient : Array | Number | None
+            Seed gradient of the same shape as this tensor. Required unless this
+            tensor holds a single element, in which case it defaults to 1.0.
 
-        self.grad = np.ones_like(self.data)
-        for x in reversed(order):
-            x.reverse()
+        Raises
+        ------
+        ValueError
+            If this tensor is not a single element and no seed gradient is given,
+            or if the seed gradient's shape does not match.
+        """
 
-    def transpose(self) -> Tensor:
-        return Tensor(transpose(self.data))
+        if gradient is None:
+            if self.size != 1:
+                raise ValueError(
+                    "backward() on a Tensor with more than one element requires an "
+                    f"explicit gradient, but this Tensor has shape {self.shape}. "
+                    "Reduce it to a scalar (e.g. with pynn.core.math.sum) or pass "
+                    "gradient=... to specify the seed."
+                )
+            seed = np.ones_like(self.data, dtype=np.float64)
+        else:
+            seed = np.asarray(gradient, dtype=np.float64)
+            if seed.shape != self.data.shape:
+                raise ValueError(
+                    f"gradient shape {seed.shape} does not match Tensor shape "
+                    f"{self.data.shape}"
+                )
+
+        self.grad = self.grad + seed
+
+        for tensor in reversed(self._topological_order()):
+            tensor.reverse()
+
+    def _topological_order(self) -> list[Tensor]:
+        """Tensors in this graph, children before parents.
+
+        Iterative rather than recursive so that deep graphs (long chains of
+        operations, or unrolled recurrences) do not exhaust the Python stack.
+        """
+
+        order: list[Tensor] = []
+        visited: set[Tensor] = set()
+        # Each frame is (tensor, index of the next child to visit).
+        stack: list[tuple[Tensor, int]] = [(self, 0)]
+        visited.add(self)
+
+        while stack:
+            tensor, child_index = stack.pop()
+            if child_index < len(tensor.children):
+                stack.append((tensor, child_index + 1))
+                child = tensor.children[child_index]
+                if child not in visited:
+                    visited.add(child)
+                    stack.append((child, 0))
+            else:
+                order.append(tensor)
+
+        return order
+
+    def transpose(self, axes: tuple[int, ...] | None = None) -> Tensor:
+        output = Tensor(np.transpose(self.data, axes))
+        output.add_children((self,))
+
+        if axes is None:
+            inverse: tuple[int, ...] | None = None
+        else:
+            inverse = tuple(int(i) for i in np.argsort(axes))
+
+        def reverse():
+            self.grad += np.transpose(output.grad, inverse)
+
+        output.forward = "transpose"
+        output.reverse = reverse
+
+        return output
 
     # ------------------------------------------------------------------------ #
     # Getter and Setter
     # ------------------------------------------------------------------------ #
-    @njit
     def __getitem__(self, key: int | tuple[int] | slice) -> Array | Number:
         return self.data[key]
 
-    @njit
     def __setitem__(self, key: int | tuple[int] | slice, value: ArrayLike) -> None:
         self.data[key] = value
 
@@ -87,12 +143,8 @@ class Tensor:
         output.add_children((self, other))
 
         def reverse():
-            self.grad = expand_array(self.grad, output.grad.shape)
-            other.grad = expand_array(other.grad, output.grad.shape)
-            self.grad += output.grad
-            other.grad += output.grad
-            self.grad = shrink_array(self.grad, self.data.shape)
-            other.grad = shrink_array(other.grad, other.data.shape)
+            self.grad += unbroadcast(output.grad, self.data.shape)
+            other.grad += unbroadcast(output.grad, other.data.shape)
 
         output.forward = "add"
         output.reverse = reverse
@@ -106,12 +158,8 @@ class Tensor:
         output.add_children((self, other))
 
         def reverse():
-            self.grad = expand_array(self.grad, output.grad.shape)
-            other.grad = expand_array(other.grad, output.grad.shape)
-            self.grad += output.grad
-            other.grad += -output.grad
-            self.grad = shrink_array(self.grad, self.data.shape)
-            other.grad = shrink_array(other.grad, other.data.shape)
+            self.grad += unbroadcast(output.grad, self.data.shape)
+            other.grad -= unbroadcast(output.grad, other.data.shape)
 
         output.forward = "sub"
         output.reverse = reverse
@@ -125,12 +173,8 @@ class Tensor:
         output.add_children((self, other))
 
         def reverse():
-            self.grad = expand_array(self.grad, output.grad.shape)
-            other.grad = expand_array(other.grad, output.grad.shape)
-            self.grad += other.data * output.grad
-            other.grad += self.data * output.grad
-            self.grad = shrink_array(self.grad, self.data.shape)
-            other.grad = shrink_array(other.grad, other.data.shape)
+            self.grad += unbroadcast(other.data * output.grad, self.data.shape)
+            other.grad += unbroadcast(self.data * output.grad, other.data.shape)
 
         output.forward = "mul"
         output.reverse = reverse
@@ -144,12 +188,9 @@ class Tensor:
         output.add_children((self, other))
 
         def reverse():
-            self.grad = expand_array(self.grad, output.grad.shape)
-            other.grad = expand_array(other.grad, output.grad.shape)
-            self.grad += output.grad @ other.data.T
-            other.grad += self.data.T @ output.grad
-            self.grad = shrink_array(self.grad, self.data.shape)
-            other.grad = shrink_array(other.grad, other.data.shape)
+            left, right = matrix_multiply_gradients(output.grad, self.data, other.data)
+            self.grad += left
+            other.grad += right
 
         output.forward = "matmul"
         output.reverse = reverse
@@ -157,7 +198,21 @@ class Tensor:
         return output
 
     def __truediv__(self, other: Tensor | TensorLike) -> Tensor:
-        return self * other**-1
+        other = convert_tensor_input(other)
+
+        output = Tensor(true_division(self.data, other.data))
+        output.add_children((self, other))
+
+        def reverse():
+            self.grad += unbroadcast(output.grad / other.data, self.data.shape)
+            other.grad -= unbroadcast(
+                output.grad * self.data / other.data**2, other.data.shape
+            )
+
+        output.forward = "truediv"
+        output.reverse = reverse
+
+        return output
 
     def __radd__(self, other: Tensor | TensorLike) -> Tensor:
         return self + other
@@ -169,21 +224,23 @@ class Tensor:
         return self * other
 
     def __rtruediv__(self, other: Tensor | TensorLike) -> Tensor:
-        return self**-1 * other
+        return convert_tensor_input(other) / self
+
+    def __rmatmul__(self, other: Tensor | TensorLike) -> Tensor:
+        return convert_tensor_input(other) @ self
 
     # ------------------------------------------------------------------------ #
     # Unary Operations
     # ------------------------------------------------------------------------ #
     def __pow__(self, other: Number) -> Tensor:
         if not isinstance(other, Number):
-            raise ValueError(f"Cannot perform operation on {type(other)}")
+            raise TypeError(f"Cannot perform operation on {type(other)}")
 
         output = Tensor(power(self.data, other))
         output.add_children((self,))
 
         def reverse():
-            grad = other * np.power(self.data, other - 1)
-            self.grad += grad * np.asarray(output.grad)
+            self.grad += other * np.power(self.data, other - 1) * output.grad
 
         output.forward = "pow"
         output.reverse = reverse
@@ -258,5 +315,5 @@ class Tensor:
 
 def convert_tensor_input(value: Any) -> Tensor:
     if not isinstance(value, Tensor | TensorLike):
-        raise ValueError(f"Cannot perform operation on {type(value)}")
+        raise TypeError(f"Cannot perform operation on {type(value)}")
     return value if isinstance(value, Tensor) else Tensor(value)

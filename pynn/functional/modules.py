@@ -58,7 +58,7 @@ def conv2d(
     Tensor
         Output tensor of shape (batch, out_ch, out_h, out_w).
     """
-    batch_size, input_shape = X.shape[0], X.shape[1:]
+    batch_size = X.shape[0]
     out_ch, in_ch, kh, kw = K.shape
     _, in_h, in_w = X.shape[1:]
     sh, sw = stride
@@ -100,21 +100,21 @@ def conv2d(
                 # d(out[b,o,oh,ow])/d(patch) = K[o]; d/dK = patch * out_grad
                 patch = X_pad[:, :, h_start : h_start + kh, w_start : w_start + kw]
                 # O_grad (batch, out_ch) -> broadcast to (batch, out_ch, in_ch, kh, kw)
-                X_pad_grad[
-                    :, :, h_start : h_start + kh, w_start : w_start + kw
-                ] += np.einsum("bo,oijk->bijk", O_grad[:, :, oh, ow], K_arr)
+                X_pad_grad[:, :, h_start : h_start + kh, w_start : w_start + kw] += (
+                    np.einsum("bo,oijk->bijk", O_grad[:, :, oh, ow], K_arr)
+                )
                 K_grad += np.einsum("bo,bijk->oijk", O_grad[:, :, oh, ow], patch)
 
         # Unpad gradient back to input shape
         if ph == 0 and pw == 0:
-            X.grad = X_pad_grad
+            X.grad += X_pad_grad
         else:
-            X.grad = X_pad_grad[:, :, ph : ph + in_h, pw : pw + in_w]
+            X.grad += X_pad_grad[:, :, ph : ph + in_h, pw : pw + in_w]
 
-        K.grad = K_grad
+        K.grad += K_grad
         if B is not None:
             # B has shape (out_ch, out_h, out_w); gradient is sum over batch
-            B.grad = np.sum(O_grad, axis=0)
+            B.grad += np.sum(O_grad, axis=0)
 
     output.reverse = reverse
     output.forward = "conv2d"

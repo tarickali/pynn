@@ -21,8 +21,7 @@ def abs(x: TensorLike) -> Tensor:
     output.add_children((x,))
 
     def reverse():
-        grad = np.sign(array)
-        x.grad = grad * output.grad
+        x.grad += np.sign(array) * output.grad
 
     output.forward = "abs"
     output.reverse = reverse
@@ -30,19 +29,18 @@ def abs(x: TensorLike) -> Tensor:
     return output
 
 
-def sum(x: TensorLike, axis: int | tuple[int] = None) -> Tensor:
+def sum(x: TensorLike, axis: int | tuple[int, ...] | None = None) -> Tensor:
     x = x if isinstance(x, Tensor) else Tensor(x)
 
     array = x.data
-    # TODO NOTE Can use the following to squeeze the array if it is a scalar:
-    # `keepdims=False if axis is None or len(axis) == len(x.arr.shape) else True`
     data = np.sum(array, axis=axis, keepdims=True)
     output = Tensor(data)
     output.add_children((x,))
 
     def reverse():
-        grad = np.ones_like(array)
-        x.grad = grad * output.grad
+        # keepdims=True above leaves the reduced axes as length 1, so the incoming
+        # gradient broadcasts back over them without any reshaping here.
+        x.grad += np.broadcast_to(output.grad, array.shape)
 
     output.forward = "sum"
     output.reverse = reverse
@@ -50,25 +48,20 @@ def sum(x: TensorLike, axis: int | tuple[int] = None) -> Tensor:
     return output
 
 
-def mean(x: TensorLike, axis: int | tuple[int] = None) -> Tensor:
+def mean(x: TensorLike, axis: int | tuple[int, ...] | None = None) -> Tensor:
     x = x if isinstance(x, Tensor) else Tensor(x)
     axis = axis if isinstance(axis, tuple) or axis is None else (axis,)
 
     array = x.data
-    # TODO NOTE Can use the following to squeeze the array if it is a scalar:
-    # `keepdims=False if axis is None or len(axis) == len(x.arr.shape) else True`
     data = np.mean(array, axis=axis, keepdims=True)
     output = Tensor(data)
     output.add_children((x,))
 
     def reverse():
-        norm = (
-            np.prod([np.size(array, axis=i) for i in axis])
-            if axis is not None
-            else array.size
+        count = (
+            np.prod([array.shape[i] for i in axis]) if axis is not None else array.size
         )
-        grad = np.full_like(array, 1.0 / norm)
-        x.grad = grad * output.grad
+        x.grad += np.broadcast_to(output.grad, array.shape) / count
 
     output.forward = "mean"
     output.reverse = reverse
@@ -85,8 +78,7 @@ def exp(x: TensorLike) -> Tensor:
     output.add_children((x,))
 
     def reverse():
-        grad = data
-        x.grad = grad * output.grad
+        x.grad += data * output.grad
 
     output.forward = "exp"
     output.reverse = reverse
@@ -98,13 +90,15 @@ def log(x: TensorLike) -> Tensor:
     x = x if isinstance(x, Tensor) else Tensor(x)
 
     array = x.data
-    data = np.log(array + EPSILON)
+    # Clamp rather than offsetting the input by EPSILON: an offset biases the result
+    # everywhere, and at EPSILON ~ 2.2e-16 it is far too small to tame log(0) anyway.
+    safe = np.maximum(array, EPSILON)
+    data = np.log(safe)
     output = Tensor(data)
     output.add_children((x,))
 
     def reverse():
-        grad = 1 / (array + EPSILON)
-        x.grad = grad * output.grad
+        x.grad += output.grad / safe
 
     output.forward = "log"
     output.reverse = reverse

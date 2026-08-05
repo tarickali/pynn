@@ -36,41 +36,33 @@ class Adam(Optimizer):
         ]
 
     def update(self) -> None:
-        L = len(self.parameters)
         t = self.time + 1
-        for l in range(L):
-            params = self.parameters[l]
-            cache = self.cache[l]
+        for params, cache in zip(self.parameters, self.cache):
             for key, param in params.items():
-                data, g = get_data_and_grad(param)
-                g = g if not self.maximize else -g
+                data, grad = get_data_and_grad(param)
+                g = -grad if self.maximize else grad
                 g = g + self.weight_decay * data
-                if t == 1:
-                    cache["momentum"][key] = (1 - self.beta_1) * g
-                    cache["velocity"][key] = (1 - self.beta_2) * (g**2)
-                else:
-                    cache["momentum"][key] = (
-                        self.beta_1 * cache["momentum"][key] + (1 - self.beta_1) * g
-                    )
-                    cache["velocity"][key] = self.beta_2 * cache["velocity"][key] + (
-                        1 - self.beta_2
-                    ) * (g**2)
+                if key not in cache["momentum"]:
+                    cache["momentum"][key] = np.zeros_like(g)
+                    cache["velocity"][key] = np.zeros_like(g)
+                    cache["vhat_max"][key] = np.zeros_like(g)
+
+                cache["momentum"][key] = (
+                    self.beta_1 * cache["momentum"][key] + (1 - self.beta_1) * g
+                )
+                cache["velocity"][key] = self.beta_2 * cache["velocity"][key] + (
+                    1 - self.beta_2
+                ) * (g**2)
+
                 mhat = cache["momentum"][key] / (1 - self.beta_1**t)
                 vhat = cache["velocity"][key] / (1 - self.beta_2**t)
                 if self.amsgrad:
-                    if t == 1:
-                        cache["vhat_max"][key] = np.copy(vhat)
-                    else:
-                        cache["vhat_max"][key] = np.maximum(
-                            cache["vhat_max"][key], vhat
-                        )
-                    param.data = param.data - self.learning_rate * mhat / (
-                        np.sqrt(cache["vhat_max"][key]) + self.eps
-                    )
-                else:
-                    param.data = param.data - self.learning_rate * mhat / (
-                        np.sqrt(vhat) + self.eps
-                    )
+                    cache["vhat_max"][key] = np.maximum(cache["vhat_max"][key], vhat)
+                    vhat = cache["vhat_max"][key]
+
+                param.data = param.data - self.learning_rate * mhat / (
+                    np.sqrt(vhat) + self.eps
+                )
         self.increment()
 
     def reset(self) -> None:

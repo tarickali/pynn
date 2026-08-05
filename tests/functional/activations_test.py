@@ -1,11 +1,19 @@
 import numpy as np
-import tensorflow as tf
+import pytest
+
 import pynn.functional as F
+
+tf = pytest.importorskip(
+    "tensorflow", reason="comparison against TensorFlow is optional"
+)
+
+pytestmark = pytest.mark.external
 
 
 def test_activations():
+    rng = np.random.default_rng(0)
     for _ in range(50):
-        x = np.random.randn(32, 10)
+        x = rng.standard_normal((32, 10))
 
         # identity #
         y = F.identity(x)

@@ -1,0 +1,400 @@
+"""Behavioral invariants of the autodiff engine, optimizers, and public API.
+
+These are the properties that are easy to break without any test going red, because
+the library keeps running and training keeps roughly working: a gradient that is
+overwritten instead of accumulated, a momentum buffer that decays to nothing, an
+optimizer that silently ignores a flag.
+
+Each optimizer is compared against a closed-form transcription of its published update
+rule rather than against a "loss went down" assertion, since a broken momentum buffer
+still descends, just more slowly.
+
+Some known limitations are deliberately not asserted here (`Module.freeze` is ignored by
+the optimizers, `Conv2d` bias is per-position rather than per-channel, and comparing
+Tensors returns a Tensor rather than a bool). Those are design issues rather than
+regressions; see PROJECT_REVIEW.md.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+
+import pynn.core.math as pmath
+from pynn.core import Tensor
+from pynn.nn import Linear, Sequential
+from pynn.nn.factories import activation_factory, initializer_factory
+from pynn.nn.losses import MeanSquaredError
+from pynn.optim import SGD, Adadelta, Adagrad, Adam, RMSprop
+from pynn.verify.report import CheckReport
+
+__all__ = ["check_api", "check_autodiff", "check_invariants", "check_optimizers"]
+
+ACTIVATION_NAMES = [
+    "affine",
+    "elu",
+    "identity",
+    "relu",
+    "selu",
+    "sigmoid",
+    "softmax",
+    "softplus",
+    "tanh",
+]
+
+INITIALIZER_NAMES = [
+    "he_normal",
+    "he_uniform",
+    "lecun_normal",
+    "lecun_uniform",
+    "ones",
+    "random_normal",
+    "random_uniform",
+    "xavier_normal",
+    "xavier_uniform",
+    "zeros",
+]
+
+ALL_OPTIMIZERS = [SGD, Adam, RMSprop, Adagrad, Adadelta]
+
+
+def check_autodiff() -> CheckReport:
+    """Verify graph construction, gradient accumulation, and backward's contract."""
+
+    report = CheckReport(name="autodiff")
+
+    # Indexing must not be routed through a JIT decorator that cannot compile a
+    # bound method; that made every subscript raise whenever Numba was installed.
+    tensor = Tensor(np.arange(12.0).reshape(3, 4))
+    try:
+        # Copy, since indexing returns a view into the underlying array.
+        row = np.array(tensor[0])
+        tensor[0] = np.zeros(4)
+        report.add(
+            "Tensor supports indexing and assignment",
+            row.tolist() == [0.0, 1.0, 2.0, 3.0]
+            and np.asarray(tensor[0]).tolist() == [0.0] * 4,
+        )
+    except Exception as error:  # noqa: BLE001 - reported, not swallowed
+        report.add(
+            "Tensor supports indexing and assignment",
+            False,
+            f"raised {type(error).__name__}: {error}",
+        )
+
+    # Transposing must stay on the tape. Returning a detached Tensor here yields a
+    # zero gradient with no error at all.
+    x = Tensor(np.random.default_rng(0).standard_normal((3, 4)))
+    y = Tensor(np.random.default_rng(1).standard_normal((3, 2)))
+    pmath.sum(x.T @ y).backward()
+    report.add(
+        "transpose participates in the graph",
+        bool(np.any(x.grad != 0.0)),
+        f"max |grad| = {np.abs(x.grad).max():.3g}",
+    )
+
+    # Two backward passes without zero_grad must double the gradient. Reducing a
+    # broadcast operand by mutating its accumulated gradient instead of the incoming
+    # one scales the old value by the batch size.
+    rng = np.random.default_rng(11)
+    X = Tensor(rng.standard_normal((4, 3)))
+    W = Tensor(rng.standard_normal((3, 2)))
+    b = Tensor(rng.standard_normal((2,)))
+    pmath.sum(X @ W + b).backward()
+    first = b.grad.copy()
+    pmath.sum(X @ W + b).backward()
+    report.add(
+        "backward accumulates across calls",
+        bool(np.allclose(b.grad, 2 * first)),
+        f"{first.tolist()} then {b.grad.tolist()}",
+    )
+
+    b.zero_grad()
+    report.add("zero_grad clears gradients", bool(np.all(b.grad == 0.0)))
+
+    # A tensor feeding two consumers must sum both contributions.
+    shared = Tensor(np.array([[1.0, -2.0]]))
+    (pmath.sum(shared) + pmath.sum(shared * 2.0)).backward()
+    report.add(
+        "gradients from multiple consumers are summed",
+        bool(np.allclose(shared.grad, 3.0)),
+        f"grad={shared.grad.tolist()} (expected 3.0)",
+    )
+
+    # The topological sort must not recurse, or deep graphs blow the Python stack.
+    deep = Tensor(np.array([1.0]))
+    accumulator = deep
+    for _ in range(5000):
+        accumulator = accumulator + 1.0
+    try:
+        accumulator.backward()
+        report.add(
+            "backward handles a 5000-node chain",
+            bool(np.allclose(deep.grad, 1.0)),
+        )
+    except RecursionError:
+        report.add("backward handles a 5000-node chain", False, "RecursionError")
+
+    # Seeding a non-scalar output with ones silently differentiates a different
+    # function than the caller asked for, so it must be refused.
+    non_scalar = Tensor(np.array([[1.0, 2.0], [3.0, 4.0]])) * 2.0
+    try:
+        non_scalar.backward()
+        report.add("backward rejects a non-scalar output", False, "no error raised")
+    except ValueError:
+        report.add("backward rejects a non-scalar output", True)
+
+    explicit = Tensor(np.array([[1.0, 2.0]]))
+    (explicit * 2.0).backward(gradient=np.ones((1, 2)))
+    report.add(
+        "backward accepts an explicit seed gradient",
+        bool(np.allclose(explicit.grad, 2.0)),
+    )
+
+    try:
+        (Tensor(np.array([1.0, 2.0])) * 2.0).backward(gradient=np.ones((3,)))
+        report.add("backward rejects a mismatched seed", False, "no error raised")
+    except ValueError:
+        report.add("backward rejects a mismatched seed", True)
+
+    return report
+
+
+def _trajectory(optimizer_cls, steps: int = 6, gradient: float = 0.7, **kwargs):
+    """Step one scalar parameter with a constant gradient, returning its values."""
+    param = Tensor(np.array([1.0]))
+    optimizer = optimizer_cls([{"w": param}], **kwargs)
+
+    values = []
+    for _ in range(steps):
+        param.grad = np.array([gradient])
+        optimizer.update()
+        values.append(float(param.data[0]))
+    return values
+
+
+def check_optimizers() -> CheckReport:
+    """Verify each optimizer against a closed-form reference implementation."""
+
+    report = CheckReport(name="optimizers")
+    steps, grad, start = 6, 0.7, 1.0
+
+    # --- SGD, plain ------------------------------------------------------- #
+    lr = 0.1
+    expected, value = [], start
+    for _ in range(steps):
+        value -= lr * grad
+        expected.append(value)
+    report.add(
+        "SGD matches the reference update",
+        bool(np.allclose(_trajectory(SGD, learning_rate=lr), expected)),
+    )
+
+    # --- SGD with momentum ------------------------------------------------ #
+    # buf = momentum * buf + (1 - dampening) * grad. Dropping the gradient term
+    # makes the buffer decay to zero, so momentum silently does nothing.
+    momentum = 0.9
+    expected, value, buffer = [], start, None
+    for _ in range(steps):
+        buffer = grad if buffer is None else momentum * buffer + grad
+        value -= lr * buffer
+        expected.append(value)
+    actual = _trajectory(SGD, learning_rate=lr, momentum=momentum)
+    report.add(
+        "SGD momentum matches the reference update",
+        bool(np.allclose(actual, expected)),
+        f"got {np.round(actual, 5).tolist()}",
+    )
+
+    step_sizes = -np.diff([start] + actual)
+    report.add(
+        "SGD momentum accelerates under a constant gradient",
+        bool(np.all(np.diff(step_sizes) > 0)),
+        f"step sizes {np.round(step_sizes, 5).tolist()}",
+    )
+
+    # --- SGD, Nesterov ---------------------------------------------------- #
+    expected, value, buffer = [], start, None
+    for _ in range(steps):
+        buffer = grad if buffer is None else momentum * buffer + grad
+        value -= lr * (grad + momentum * buffer)
+        expected.append(value)
+    report.add(
+        "SGD Nesterov matches the reference update",
+        bool(
+            np.allclose(
+                _trajectory(SGD, learning_rate=lr, momentum=momentum, nesterov=True),
+                expected,
+            )
+        ),
+    )
+
+    # --- Adam ------------------------------------------------------------- #
+    lr, beta_1, beta_2, eps = 0.01, 0.9, 0.999, 1e-8
+    expected, value, m, v = [], start, 0.0, 0.0
+    for step in range(1, steps + 1):
+        m = beta_1 * m + (1 - beta_1) * grad
+        v = beta_2 * v + (1 - beta_2) * grad**2
+        value -= lr * (m / (1 - beta_1**step)) / (np.sqrt(v / (1 - beta_2**step)) + eps)
+        expected.append(value)
+    report.add(
+        "Adam matches the reference update",
+        bool(np.allclose(_trajectory(Adam, learning_rate=lr), expected)),
+    )
+
+    # --- RMSprop ---------------------------------------------------------- #
+    lr, alpha, eps = 0.01, 0.99, 1e-10
+    expected, value, square_average = [], start, 0.0
+    for _ in range(steps):
+        square_average = alpha * square_average + (1 - alpha) * grad**2
+        value -= lr * grad / (np.sqrt(square_average) + eps)
+        expected.append(value)
+    report.add(
+        "RMSprop matches the reference update",
+        bool(np.allclose(_trajectory(RMSprop, learning_rate=lr), expected)),
+    )
+
+    # --- Adagrad ---------------------------------------------------------- #
+    expected, value, total = [], start, 0.0
+    for _ in range(steps):
+        total += grad**2
+        value -= lr * grad / (np.sqrt(total) + eps)
+        expected.append(value)
+    report.add(
+        "Adagrad matches the reference update",
+        bool(np.allclose(_trajectory(Adagrad, learning_rate=lr), expected)),
+    )
+
+    # --- Adadelta --------------------------------------------------------- #
+    lr, rho = 1.0, 0.9
+    expected, value, average, accumulator = [], start, 0.0, 0.0
+    for _ in range(steps):
+        average = rho * average + (1 - rho) * grad**2
+        delta = np.sqrt((accumulator + eps) / (average + eps)) * grad
+        accumulator = rho * accumulator + (1 - rho) * delta**2
+        value -= lr * delta
+        expected.append(value)
+    report.add(
+        "Adadelta matches the reference update",
+        bool(np.allclose(_trajectory(Adadelta, learning_rate=lr), expected)),
+    )
+
+    # --- flags and shared behavior ---------------------------------------- #
+    for optimizer_cls in ALL_OPTIMIZERS:
+        name = optimizer_cls.__name__
+        ascending = _trajectory(optimizer_cls, learning_rate=0.01, maximize=True)
+        report.add(
+            f"{name} honors maximize",
+            bool(np.all(np.diff([start] + ascending) > 0)),
+        )
+
+        # Layers build their parameters on the first forward pass, so the optimizer
+        # is constructed against dictionaries that are still empty.
+        model = Sequential([Linear(4, 3)])
+        optimizer = optimizer_cls(model.parameters, learning_rate=0.1)
+        X = Tensor(np.random.default_rng(0).standard_normal((5, 4)))
+        loss = MeanSquaredError()(Tensor(np.zeros((5, 3))), model(X))
+        model.zero_grad()
+        loss.backward()
+        before = model.modules[0].parameters["W"].data.copy()
+        optimizer.update()
+        report.add(
+            f"{name} updates lazily built parameters",
+            not np.allclose(before, model.modules[0].parameters["W"].data),
+        )
+
+        rng = np.random.default_rng(3)
+        model = Sequential([Linear(4, 8, activation="tanh"), Linear(8, 1)])
+        loss_fn = MeanSquaredError()
+        optimizer = optimizer_cls(model.parameters, learning_rate=0.05)
+        X = Tensor(rng.standard_normal((16, 4)))
+        y = Tensor(rng.standard_normal((16, 1)))
+        first_loss = float(loss_fn(y, model(X)).item())
+        for _ in range(50):
+            loss = loss_fn(y, model(X))
+            model.zero_grad()
+            loss.backward()
+            optimizer.update()
+        last_loss = float(loss_fn(y, model(X)).item())
+        report.add(
+            f"{name} reduces the loss",
+            last_loss < first_loss,
+            f"{first_loss:.4f} -> {last_loss:.4f}",
+        )
+
+    return report
+
+
+def check_api() -> CheckReport:
+    """Verify that every documented factory name and layer shape path works."""
+
+    report = CheckReport(name="api")
+
+    # Every name the factory advertises must construct without arguments. `elu`
+    # used to raise TypeError here because its alpha had no default.
+    for name in ACTIVATION_NAMES:
+        try:
+            activation = activation_factory(name)
+            report.add(f"activation_factory({name!r})", activation is not None)
+        except Exception as error:  # noqa: BLE001 - reported, not swallowed
+            report.add(
+                f"activation_factory({name!r})",
+                False,
+                f"raised {type(error).__name__}: {error}",
+            )
+
+    for name in INITIALIZER_NAMES:
+        try:
+            initializer = initializer_factory(name)
+            shape = initializer((4, 3)).shape
+            report.add(
+                f"initializer_factory({name!r})", shape == (4, 3), f"shape {shape}"
+            )
+        except Exception as error:  # noqa: BLE001 - reported, not swallowed
+            report.add(
+                f"initializer_factory({name!r})",
+                False,
+                f"raised {type(error).__name__}: {error}",
+            )
+
+    for name in ["constant", "random_normal", "random_uniform"]:
+        params = {"value": 0.5} if name == "constant" else {}
+        try:
+            initializer = initializer_factory({"name": name, "params": params})
+            report.add(
+                f"initializer_factory dict form for {name!r}", initializer is not None
+            )
+        except Exception as error:  # noqa: BLE001 - reported, not swallowed
+            report.add(
+                f"initializer_factory dict form for {name!r}",
+                False,
+                f"raised {type(error).__name__}: {error}",
+            )
+
+    # Lazy shape inference: Linear(out_features) resolves in_features on first call.
+    lazy = Linear(6)
+    output = lazy(Tensor(np.zeros((5, 4))))
+    report.add(
+        "Linear infers in_features on first forward",
+        lazy.in_features == 4 and output.shape == (5, 6),
+        f"in_features={lazy.in_features}, output {output.shape}",
+    )
+
+    unknown_rejected = True
+    for factory in (activation_factory, initializer_factory):
+        try:
+            factory("not_a_real_name")
+            unknown_rejected = False
+        except ValueError:
+            pass
+    report.add("factories reject unknown names", unknown_rejected)
+
+    return report
+
+
+def check_invariants() -> CheckReport:
+    """Run the autodiff, optimizer, and API invariant checks together."""
+
+    report = CheckReport(name="invariants")
+    for suite in (check_autodiff(), check_optimizers(), check_api()):
+        report.extend(suite)
+    return report

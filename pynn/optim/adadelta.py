@@ -30,33 +30,27 @@ class Adadelta(Optimizer):
         ]
 
     def update(self) -> None:
-        L = len(self.parameters)
-        t = self.time + 1
-        for l in range(L):
-            params = self.parameters[l]
-            cache = self.cache[l]
+        for params, cache in zip(self.parameters, self.cache):
             for key, param in params.items():
-                data, g = get_data_and_grad(param)
+                data, grad = get_data_and_grad(param)
+                g = -grad if self.maximize else grad
                 g = g + self.weight_decay * data
-                if t == 1:
-                    cache["average"][key] = (1 - self.rho) * (g**2)
-                    delta = (self.eps / (cache["average"][key] + self.eps)) ** 0.5 * g
-                    cache["accumulator"][key] = (1 - self.rho) * (delta**2)
-                else:
-                    cache["average"][key] = self.rho * cache["average"][key] + (
-                        1 - self.rho
-                    ) * (g**2)
-                    delta = (
-                        (cache["accumulator"][key] + self.eps)
-                        / (cache["average"][key] + self.eps)
-                    ) ** 0.5 * g
-                    cache["accumulator"][key] = self.rho * cache["accumulator"][key] + (
-                        1 - self.rho
-                    ) * (delta**2)
-                if self.maximize:
-                    param.data = param.data + self.learning_rate * delta
-                else:
-                    param.data = param.data - self.learning_rate * delta
+                if key not in cache["average"]:
+                    cache["average"][key] = np.zeros_like(g)
+                    cache["accumulator"][key] = np.zeros_like(g)
+
+                cache["average"][key] = self.rho * cache["average"][key] + (
+                    1 - self.rho
+                ) * (g**2)
+                delta = (
+                    (cache["accumulator"][key] + self.eps)
+                    / (cache["average"][key] + self.eps)
+                ) ** 0.5 * g
+                cache["accumulator"][key] = self.rho * cache["accumulator"][key] + (
+                    1 - self.rho
+                ) * (delta**2)
+
+                param.data = param.data - self.learning_rate * delta
         self.increment()
 
     def reset(self) -> None:

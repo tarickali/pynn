@@ -41,8 +41,13 @@ all = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["pynn"]
+include = ["pynn*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+addopts = "--strict-markers"
+markers = [
+    "external: requires an optional third-party framework (torch, tensorflow)",
+    "slow: takes more than a second or two to run",
+]

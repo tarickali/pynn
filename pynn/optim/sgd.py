@@ -32,29 +32,24 @@ class SGD(Optimizer):
         ]
 
     def update(self) -> None:
-        L = len(self.parameters)
-        t = self.time + 1
-        for l in range(L):
-            params = self.parameters[l]
-            cache = self.cache[l]
+        for params, cache in zip(self.parameters, self.cache):
             for key, param in params.items():
-                data, g = get_data_and_grad(param)
+                data, grad = get_data_and_grad(param)
+                g = -grad if self.maximize else grad
                 g = g + self.weight_decay * data
+
                 if self.momentum != 0.0:
-                    if t == 1:
-                        cache["velocity"][key] = np.copy(g)
+                    velocity = cache["velocity"].get(key)
+                    if velocity is None:
+                        # First step for this parameter: the buffer is seeded with the
+                        # gradient itself rather than being damped, matching PyTorch.
+                        velocity = np.copy(g)
                     else:
-                        cache["velocity"][key] = (
-                            self.momentum * cache["velocity"][key] + self.dampening * g
-                        )
-                    if self.nesterov:
-                        g = g + self.momentum * cache["velocity"][key]
-                    else:
-                        g = cache["velocity"][key]
-                if self.maximize:
-                    param.data = param.data + self.learning_rate * g
-                else:
-                    param.data = param.data - self.learning_rate * g
+                        velocity = self.momentum * velocity + (1 - self.dampening) * g
+                    cache["velocity"][key] = velocity
+                    g = g + self.momentum * velocity if self.nesterov else velocity
+
+                param.data = param.data - self.learning_rate * g
         self.increment()
 
     def reset(self) -> None:

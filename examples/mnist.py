@@ -70,7 +70,7 @@ def mnist_driver():
         )
 
     loss_fn = CategoricalCrossentropy(logits=True)
-    optimizer = SGD(model.parameters, learning_rate=ALPHA, momentum=0.9, dampening=0.1)
+    optimizer = SGD(model.parameters, learning_rate=ALPHA, momentum=0.9)
     softmax = Softmax()
 
     n_train = X_train.shape[0]

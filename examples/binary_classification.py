@@ -25,7 +25,7 @@ def binary_classification():
     )
 
     loss_fn = BinaryCrossentropy(logits=False)
-    optimizer = SGD(model.parameters, learning_rate=ALPHA, momentum=0.9, dampening=0.1)
+    optimizer = SGD(model.parameters, learning_rate=ALPHA, momentum=0.9)
 
     history = []
     for e in range(EPOCHS):

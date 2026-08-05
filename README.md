@@ -13,28 +13,28 @@
 - **Optimizers** — SGD (momentum, weight decay, Nesterov), Adam, RMSprop, Adagrad, Adadelta, with standard hyperparameters.
 - **Initializers** — Zeros, ones, constant, random uniform/normal, Xavier (Glorot), He, and LeCun variants (uniform and normal).
 - **Utilities** — `one_hot`, batched data iteration (`get_batches`), and helpers for training loops.
+- **Verified gradients** — every differentiable operation is checked against central-difference numerical gradients, including broadcasting and non-linear graph topologies (shared inputs, residual connections, tied weights). The checker is public API: see [Gradient checking](#gradient-checking).
 
 ---
 
 ## Installation
 
-From the project root (`pynn` directory):
+From the project root:
 
 ```bash
-pip install numpy scipy
+pip install -e .
 ```
 
-**Optional:** [Numba](https://numba.pydata.org/) can speed up some tensor operations; the library works without it.
+**Optional extras** are declared in `pyproject.toml`:
 
 ```bash
-pip install numba
+pip install -e ".[examples,mnist]"   # scikit-learn, pandas for examples
+pip install -e ".[dev]"              # pytest
+pip install -e ".[test]"             # pytest + torch + tensorflow
 ```
 
-For running the full test suite (which compares against PyTorch/TensorFlow):
-
-```bash
-pip install torch tensorflow
-```
+Only NumPy is required at runtime. The `torch` and `tensorflow` extras are used solely by
+the optional comparison tests, which skip automatically when those packages are absent.
 
 ---
 
@@ -74,10 +74,16 @@ optimizer.update()
 
 | Area | Contents |
 |------|----------|
-| **`pynn.core`** | `Tensor` (autograd), `Module`, `Model`, `Loss`, `Optimizer`, types, constants, `expand_array` / `shrink_array`, and math (`abs`, `sum`, `mean`, `exp`, `log`). |
-| **`pynn.nn`** | Layers: `Linear`, `Conv2d`, `Flatten`, `Activation`, `Sequential`. Activations: `ReLU`, `Sigmoid`, `Tanh`, `Softmax`, `ELU`, `SELU`, `SoftPlus`, `Identity`, `Affine`. Losses: `BinaryCrossentropy`, `CategoricalCrossentropy`, `MeanSquaredError`, `MeanAbsoluteError` (aliases: `BCELoss`, `CrossEntropyLoss`, `MSELoss`, `L1Loss`). Factories: `activation_factory`, `initializer_factory`. |
+| **`pynn.core`** | `Tensor` (autograd), `Module`, `Model`, `Loss`, `Optimizer`, `Activation`, `Initializer`, types, constants. |
+| **`pynn.core.math`** | `abs`, `sum`, `mean`, `exp`, `log` (import as a module — these shadow builtins). |
+| **`pynn.core.utils`** | `unbroadcast`, `matrix_multiply_gradients` (backward-pass shape plumbing). |
+| **`pynn.core.numeric`** | `stable_sigmoid` (overflow-free kernel shared by the activations and losses). |
+| **`pynn.nn`** | Layers: `Linear`, `Conv2d`, `Flatten`, `Activation`, `Sequential`. Activations: `ReLU`, `Sigmoid`, `Tanh`, `Softmax`, `ELU`, `SELU`, `SoftPlus`, `Identity`, `Affine`. Losses: `BinaryCrossentropy`, `CategoricalCrossentropy`, `MeanSquaredError`, `MeanAbsoluteError` (aliases: `BCELoss`, `CrossEntropyLoss`, `MSELoss`, `L1Loss`). |
+| **`pynn.nn.factories`** | `activation_factory`, `initializer_factory`. |
+| **`pynn.functional`** | Activation functions (`relu`, `sigmoid`, `softmax`, ...). Losses and module functions live in `pynn.functional.losses` and `pynn.functional.modules`. |
 | **`pynn.optim`** | `SGD`, `Adam`, `RMSprop`, `Adagrad`, `Adadelta`. |
 | **`pynn.utils`** | `one_hot`, `get_batches`, `make_pair`, `pad_for_conv`, `get_data_and_grad`. |
+| **`pynn.verify`** | Self-verification suite: `check_gradients` and `numerical_gradient` for your own operations, plus `check_all_gradients`, `check_stability`, `check_invariants`, and `run_all`. |
 
 Activations and initializers can be specified by string in layers (e.g. `activation="relu"`, `weight_initializer="he_normal"`) or constructed via the factories.
 
@@ -85,7 +91,7 @@ Activations and initializers can be specified by string in layers (e.g. `activat
 
 ## Examples
 
-From the `pynn` directory:
+From the project root:
 
 ```bash
 # Regression
@@ -94,11 +100,13 @@ python -m examples.regression
 # Binary classification (circles)
 python -m examples.binary_classification
 
-# MNIST-style classification (uses CSV or synthetic data)
+# MNIST classification — reaches ~98% test accuracy.
+# Uses examples/data/mnist/train.csv if present (see scripts/download_mnist.py),
+# otherwise falls back to synthetic data.
 python -m examples.mnist
 ```
 
-Or run the default example via the top-level entry point:
+Or run the Quick Start example:
 
 ```bash
 python main.py
@@ -108,26 +116,92 @@ python main.py
 
 ## Testing
 
-**Smoke test** (no optional dependencies):
+All commands run from the project root.
 
 ```bash
-cd pynn
+# Full suite. Needs only NumPy and pytest; the optional torch/tensorflow
+# comparison tests skip themselves when those packages are absent.
+pytest
+
+# Gradient checks only
+pytest tests/test_gradcheck.py
+
+# The shipped self-verification suites
+pytest tests/test_verify.py
+
+# Skip the third-party comparison tests entirely
+pytest -m "not external"
+
+# Coverage
+pytest --cov=pynn --cov-report=term-missing
+```
+
+A dependency-free smoke test is also available:
+
+```bash
 python scripts/smoke_test.py
 ```
 
-**Core tests** (NumPy; Numba recommended):
+---
+
+## Verification
+
+An autodiff library can be wrong while looking healthy: training loss still falls when a
+gradient is quietly scaled by the batch size, and an activation that overflows to `inf`
+only poisons a run once the inputs grow large enough. `pynn.verify` makes those failures
+observable, and ships with the package so it can be run against an installed copy:
 
 ```bash
-cd pynn
-pytest tests/core/ -v
+python -m pynn.verify              # failures only
+python -m pynn.verify --verbose    # every check
+python -m pynn.verify stability    # one suite
 ```
 
-**Full test suite** (includes comparisons with PyTorch and TensorFlow; requires `torch` and `tensorflow`):
-
-```bash
-cd pynn
-pytest tests/ -v
 ```
+gradients: 111/111 passed (OK)
+invariants: 56/56 passed (OK)
+stability: 20/20 passed (OK)
+
+pynn.verify: 187/187 passed (OK)
+```
+
+Three suites:
+
+- **`check_all_gradients`** compares analytic gradients against central differences,
+  `(f(x + eps) - f(x - eps)) / 2 eps`, for every operator, math function, activation,
+  loss, and module function — across broadcasting shape combinations, and in graph
+  topologies where a tensor feeds more than one consumer (shared inputs, rejoining
+  branches, diamonds, residual connections, tied weights, auxiliary losses). Every unary
+  and binary op is checked twice, once in isolation and once with its input reused, since
+  a reverse pass that overwrites `grad` instead of accumulating into it is exactly
+  correct in the single-consumer case.
+- **`check_stability`** asserts activations and losses stay finite at `|x|` up to 1000,
+  well past the `~709` where `exp` overflows in float64, with floating-point warnings
+  promoted to errors so a silent overflow fails the check.
+- **`check_invariants`** asserts behavioral properties of the tape (accumulation across
+  passes, deep graphs without recursion limits, `backward`'s scalar-output contract) and
+  of the optimizers, each compared against a closed-form transcription of its published
+  update rule rather than a "loss went down" assertion — a broken momentum buffer still
+  descends, just more slowly.
+
+`check_gradients` is also useful on its own for verifying a custom operation:
+
+```python
+import numpy as np
+from pynn.core import Tensor
+import pynn.core.math as pmath
+import pynn.functional as F
+from pynn.verify import check_gradients
+
+x = Tensor(np.random.randn(4, 5))
+result = check_gradients(lambda ts: pmath.sum(F.tanh(ts[0])), [x])
+
+print(result)          # per-input relative errors, and the worst element if it fails
+assert result.passed
+```
+
+The `tests/` suite covers the same ground for CI, and `tests/test_verify.py` drives these
+suites so they cannot rot.
 
 ---
 

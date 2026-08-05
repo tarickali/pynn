@@ -1,6 +1,7 @@
 import numpy as np
 from pynn.core.types import Array, Number
 from pynn.core import Tensor
+from pynn.core.numeric import stable_sigmoid
 
 TensorLike = Tensor | Array | Number
 
@@ -26,7 +27,7 @@ def identity(x: TensorLike) -> Tensor:
     output.add_children((x,))
 
     def reverse():
-        x.grad += np.ones_like(array) * np.asarray(output.grad)
+        x.grad += output.grad
 
     output.forward = "identity"
     output.reverse = reverse
@@ -44,8 +45,7 @@ def affine(x: TensorLike, slope: float = 1.0, intercept: float = 0.0) -> Tensor:
     output.add_children((x,))
 
     def reverse():
-        grad = np.full_like(array, slope)
-        x.grad = grad * output.grad
+        x.grad += slope * output.grad
 
     output.forward = "affine"
     output.reverse = reverse
@@ -62,8 +62,9 @@ def relu(x: TensorLike, alpha: float = 0.0) -> Tensor:
     output.add_children((x,))
 
     def reverse():
-        grad = alpha + (1 - alpha) * np.heaviside(array, 0.0, dtype=array.dtype)
-        x.grad = grad * output.grad
+        # Not differentiable at 0; the subgradient alpha is taken there, matching
+        # the forward pass where max(0, 0) + alpha * min(0, 0) == 0.
+        x.grad += np.where(array > 0, 1.0, alpha) * output.grad
 
     output.forward = "relu"
     output.reverse = reverse
@@ -74,14 +75,12 @@ def relu(x: TensorLike, alpha: float = 0.0) -> Tensor:
 def sigmoid(x: TensorLike) -> Tensor:
     x = x if isinstance(x, Tensor) else Tensor(x)
 
-    array = x.data
-    data = 1 / (1 + np.exp(-array))
+    data = stable_sigmoid(x.data)
     output = Tensor(data)
     output.add_children((x,))
 
     def reverse():
-        grad = data * (1 - data)
-        x.grad = grad * output.grad
+        x.grad += data * (1 - data) * output.grad
 
     output.forward = "sigmoid"
     output.reverse = reverse
@@ -98,8 +97,7 @@ def tanh(x: TensorLike) -> Tensor:
     output.add_children((x,))
 
     def reverse():
-        grad = 1 - data**2
-        x.grad = grad * output.grad
+        x.grad += (1 - data**2) * output.grad
 
     output.forward = "tanh"
     output.reverse = reverse
@@ -107,17 +105,17 @@ def tanh(x: TensorLike) -> Tensor:
     return output
 
 
-def elu(x: TensorLike, alpha: float) -> Tensor:
+def elu(x: TensorLike, alpha: float = 1.0) -> Tensor:
     x = x if isinstance(x, Tensor) else Tensor(x)
 
     array = x.data
-    data = np.where(array >= 0, array, alpha * (np.exp(array) - 1))
+    data = np.where(array >= 0, array, alpha * (np.expm1(np.minimum(array, 0.0))))
     output = Tensor(data)
     output.add_children((x,))
 
     def reverse():
-        grad = np.where(array >= 0, np.ones_like(array), alpha * np.exp(array))
-        x.grad = grad * output.grad
+        grad = np.where(array >= 0, 1.0, alpha * np.exp(np.minimum(array, 0.0)))
+        x.grad += grad * output.grad
 
     output.forward = "elu"
     output.reverse = reverse
@@ -132,15 +130,14 @@ def selu(x: TensorLike) -> Tensor:
     scale = 1.0507009873554804934193349852946
 
     array = x.data
-    data = scale * (np.maximum(0, array) + np.minimum(0, alpha * (np.exp(array) - 1)))
+    negative = np.minimum(array, 0.0)
+    data = scale * np.where(array >= 0, array, alpha * np.expm1(negative))
     output = Tensor(data)
     output.add_children((x,))
 
     def reverse():
-        grad = np.where(
-            array >= 0, scale * np.ones_like(array), alpha * scale * np.exp(array)
-        )
-        x.grad = grad * output.grad
+        grad = scale * np.where(array >= 0, 1.0, alpha * np.exp(negative))
+        x.grad += grad * output.grad
 
     output.forward = "selu"
     output.reverse = reverse
@@ -152,14 +149,14 @@ def softplus(x: TensorLike) -> Tensor:
     x = x if isinstance(x, Tensor) else Tensor(x)
 
     array = x.data
-    e = np.exp(array)
-    data = np.log(1 + e)
+    # logaddexp(0, x) == log(1 + exp(x)) without the overflow of computing exp(x)
+    # first, which returns inf for x greater than about 709.
+    data = np.logaddexp(0.0, array)
     output = Tensor(data)
     output.add_children((x,))
 
     def reverse():
-        grad = e / (1 + e)
-        x.grad = grad * output.grad
+        x.grad += stable_sigmoid(array) * output.grad
 
     output.forward = "softplus"
     output.reverse = reverse
@@ -184,8 +181,8 @@ def softmax(x: TensorLike, axis: int = -1) -> Tensor:
     def reverse():
         s = output.data
         g = output.grad
-        # Jacobian: dL/dz = s * (g - sum(s*g, axis, keepdims))
-        x.grad = s * (g - np.sum(s * g, axis=axis, keepdims=True))
+        # Jacobian-vector product: dL/dz = s * (g - sum(s*g, axis, keepdims))
+        x.grad += s * (g - np.sum(s * g, axis=axis, keepdims=True))
 
     output.forward = "softmax"
     output.reverse = reverse

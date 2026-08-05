@@ -1,14 +1,20 @@
 import numpy as np
-import torch
+import pytest
+
 from pynn.core import Tensor
 import pynn.core.math as pmath
 
+torch = pytest.importorskip("torch", reason="comparison against PyTorch is optional")
+
+pytestmark = pytest.mark.external
+
 
 def test_log():
-    W = np.random.uniform(0.1, 10.0, (10, 16))
-    x = np.random.uniform(0.1, 10.0, (32, 10))
+    rng = np.random.default_rng(0)
+    W = rng.uniform(0.1, 10.0, (10, 16))
+    x = rng.uniform(0.1, 10.0, (32, 10))
     b = np.zeros(16)
-    t = np.random.uniform(10.0, 20.0, (32, 16))
+    t = rng.uniform(10.0, 20.0, (32, 16))
 
     tensor_W = Tensor(W)
     tensor_x = Tensor(x)
