@@ -55,6 +55,7 @@ from pynn.verify.invariants import (
     check_api,
     check_autodiff,
     check_invariants,
+    check_modules,
     check_optimizers,
 )
 from pynn.verify.report import CheckReport, CheckResult
@@ -74,6 +75,7 @@ __all__ = [
     "check_case",
     "check_gradients",
     "check_invariants",
+    "check_modules",
     "check_optimizers",
     "check_stability",
     "gradient_cases",

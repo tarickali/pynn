@@ -23,7 +23,7 @@ def main():
         ]
     )
     loss_fn = MeanSquaredError()
-    optimizer = SGD(model.parameters, lr=0.01)
+    optimizer = SGD(model, lr=0.01)
 
     X_t = Tensor(X)
     y_t = Tensor(y)

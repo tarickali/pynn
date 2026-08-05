@@ -11,10 +11,10 @@ Usage (PyTorch-style):
         Linear(256, 10),
     ])
     loss_fn = CrossEntropyLoss()
-    optimizer = SGD(model.parameters, learning_rate=0.01)
+    optimizer = SGD(model, learning_rate=0.01)
 """
 
-from pynn.core import Loss, Model, Module, Tensor
+from pynn.core import Loss, Module, Tensor
 from pynn.optim import SGD, Adadelta, Adagrad, Adam, Optimizer, RMSprop
 
 __all__ = [
@@ -23,7 +23,6 @@ __all__ = [
     "Adagrad",
     "Adam",
     "Loss",
-    "Model",
     "Module",
     "Optimizer",
     "RMSprop",

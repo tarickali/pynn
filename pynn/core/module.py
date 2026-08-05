@@ -1,5 +1,11 @@
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
+
+import numpy as np
 
 from pynn.core.tensor import Tensor
 from pynn.core.types import Array, Shape
@@ -8,11 +14,27 @@ __all__ = ["Module"]
 
 
 class Module(ABC):
+    """Base class for every layer and container.
+
+    A Module owns two things: its own parameters, in `parameters`, and its child
+    modules, which are registered automatically when one is assigned to an attribute.
+    Every collective operation — `named_parameters`, `parameter_groups`, `state_dict`,
+    `zero_grad`, `train`, `freeze` — walks that tree recursively, which is what lets
+    containers nest and what lets an optimizer take a whole model regardless of how
+    deeply its layers are grouped.
+
+    Subclasses implement `forward` and `hyperparameters`, and create their parameters
+    in `build`, which is called on the first forward pass with the input shape.
+    """
+
     def __init__(self) -> None:
         super().__init__()
+        # First, because __setattr__ consults it on every subsequent assignment.
+        self._modules: dict[str, Module] = {}
         self.name: str = self.__class__.__name__
         self.parameters: dict[str, Tensor] = {}
         self.trainable: bool = True
+        self.training: bool = True
         self.initialized: bool = False
 
     @abstractmethod
@@ -33,6 +55,55 @@ class Module(ABC):
         """Build the Module parameters based on the given input shape."""
         return
 
+    # ------------------------------------------------------------------------ #
+    # The module tree
+    # ------------------------------------------------------------------------ #
+    def __setattr__(self, name: str, value: Any) -> None:
+        """Register child modules as they are assigned.
+
+        `self.encoder = Sequential(...)` in a custom Module has to put `encoder` into
+        the tree, or its parameters are invisible to the optimizer and to
+        `state_dict` — a failure that shows up as a layer that silently never trains.
+        """
+        if isinstance(value, Module):
+            modules = self.__dict__.get("_modules")
+            if modules is None:
+                raise AttributeError(
+                    f"cannot assign the child module {name!r} before "
+                    f"{type(self).__name__}.__init__() calls super().__init__()"
+                )
+            modules[name] = value
+        elif name in self.__dict__.get("_modules", {}):
+            # Overwriting a child with a non-module takes it out of the tree.
+            del self._modules[name]
+        object.__setattr__(self, name, value)
+
+    def register_module(self, name: str, module: Module) -> Module:
+        """Register `module` as a child under `name` and return it.
+
+        Containers that hold their children in a list rather than in named attributes
+        use this; attribute assignment registers automatically.
+        """
+        if not isinstance(module, Module):
+            raise TypeError(f"expected a Module, got {type(module).__name__}")
+        self._modules[name] = module
+        return module
+
+    def named_children(self) -> list[tuple[str, Module]]:
+        """The direct child modules, in registration order."""
+        return list(self._modules.items())
+
+    def named_modules(self, prefix: str = "") -> list[tuple[str, Module]]:
+        """This module and every descendant, depth first, under dotted names.
+
+        The root is included under `prefix`, which is empty by default, so a bare
+        layer's own parameters keep their unqualified names.
+        """
+        found = [(prefix, self)]
+        for name, child in self._modules.items():
+            found.extend(child.named_modules(f"{prefix}.{name}" if prefix else name))
+        return found
+
     def register_parameter(self, name: str, value: Array | Tensor) -> Tensor:
         """Register a parameter under `name` and return it.
 
@@ -46,10 +117,59 @@ class Module(ABC):
         self.parameters[name] = tensor
         return tensor
 
+    def named_parameters(self) -> dict[str, Tensor]:
+        """Every parameter in the tree, keyed by dotted path.
+
+        `Sequential([Linear(4, 3)])` reports `{"0.W": ..., "0.b": ...}`; a bare
+        `Linear` reports `{"W": ..., "b": ...}`.
+        """
+        return {
+            f"{prefix}.{name}" if prefix else name: parameter
+            for prefix, module in self.named_modules()
+            for name, parameter in module.parameters.items()
+        }
+
+    def parameter_groups(self) -> list[dict[str, Tensor]]:
+        """One group per module in the tree, in the form the optimizers consume.
+
+        The dictionaries are the modules' live `parameters`, not copies, so a layer
+        that builds its parameters on the first forward pass is still stepped by an
+        optimizer constructed before that happened. Modules with no parameters of
+        their own contribute an empty group, which keeps the list index-aligned with
+        the optimizers' per-group state as those dictionaries fill in.
+        """
+        return [module.parameters for _, module in self.named_modules()]
+
+    def num_parameters(self, trainable_only: bool = False) -> int:
+        """Total number of scalar parameters in the tree."""
+        return sum(
+            parameter.size
+            for parameter in self.named_parameters().values()
+            if parameter.trainable or not trainable_only
+        )
+
+    # ------------------------------------------------------------------------ #
+    # Collective state
+    # ------------------------------------------------------------------------ #
     def zero_grad(self) -> None:
-        """Clear the gradients for each parameter in the Module."""
-        for param in self.parameters:
-            self.parameters[param].zero_grad()
+        """Clear the gradients of every parameter in the tree."""
+        for parameter in self.named_parameters().values():
+            parameter.zero_grad()
+
+    def train(self, mode: bool = True) -> Module:
+        """Put the tree into training mode, and return self.
+
+        Dropout and the normalization layers behave differently between fitting and
+        inference; this is the switch they read. Propagating to descendants is the
+        point — a model is put in eval mode at the top and every layer has to follow.
+        """
+        for _, module in self.named_modules():
+            module.training = mode
+        return self
+
+    def eval(self) -> Module:
+        """Put the tree into evaluation mode, and return self."""
+        return self.train(False)
 
     def freeze(self) -> None:
         """Exclude this Module's parameters from optimizer updates.
@@ -64,14 +184,99 @@ class Module(ABC):
         self._set_trainable(True)
 
     def _set_trainable(self, trainable: bool) -> None:
-        # Recorded on the Module as well as the parameters, so that a build triggered
-        # after this point can propagate it to the parameters it creates.
-        self.trainable = trainable
-        for param in self.parameters.values():
-            param.trainable = trainable
+        # Recorded on each Module as well as on its parameters, so that a build
+        # triggered after this point propagates it to the parameters it creates.
+        for _, module in self.named_modules():
+            module.trainable = trainable
+            for parameter in module.parameters.values():
+                parameter.trainable = trainable
 
+    # ------------------------------------------------------------------------ #
+    # Checkpointing
+    # ------------------------------------------------------------------------ #
+    def state_dict(self) -> dict[str, Array]:
+        """Copies of every parameter's data, keyed by the same dotted paths as
+        `named_parameters`.
+
+        Copies rather than views, so that a checkpoint taken mid-training is a
+        snapshot and not a live reference to weights that keep moving.
+        """
+        return {
+            name: parameter.data.copy()
+            for name, parameter in self.named_parameters().items()
+        }
+
+    def load_state_dict(self, state: Mapping[str, Array], strict: bool = True) -> None:
+        """Copy `state` into this module's parameters in place.
+
+        Parameters are created by `build` on the first forward pass, so a model that
+        has not run one yet has nothing to load into. Run a forward pass (or call
+        `build`) before loading.
+
+        Parameters
+        ----------
+        state : Mapping[str, Array]
+            Arrays keyed as `state_dict` produces them.
+        strict : bool, default True
+            Require the keys to match exactly. With `strict=False`, missing keys keep
+            their current values and unexpected keys are ignored.
+
+        Raises
+        ------
+        KeyError
+            If `strict` and the keys do not match.
+        ValueError
+            If a matching key holds an array of the wrong shape. Checked even when
+            `strict` is False, since a silent shape mismatch loads a different model.
+        """
+        parameters = self.named_parameters()
+        missing = sorted(set(parameters) - set(state))
+        unexpected = sorted(set(state) - set(parameters))
+        if strict and (missing or unexpected):
+            raise KeyError(
+                f"state does not match this module: missing {missing}, "
+                f"unexpected {unexpected}"
+            )
+
+        for name, value in state.items():
+            parameter = parameters.get(name)
+            if parameter is None:
+                continue
+            array = np.asarray(value)
+            if array.shape != parameter.shape:
+                raise ValueError(
+                    f"parameter {name!r} has shape {parameter.shape} but the state "
+                    f"holds shape {array.shape}"
+                )
+            parameter.data = array.astype(parameter.dtype, copy=True)
+
+    def save(self, path: str | Path) -> None:
+        """Write `state_dict` to `path` as an uncompressed `.npz` archive.
+
+        Written through an open handle rather than by passing the path to
+        `numpy.savez`, which would append `.npz` and leave `load` looking in the
+        wrong place.
+        """
+        with open(path, "wb") as handle:
+            # numpy types `savez` with a keyword-only `allow_pickle: bool`, so mypy
+            # checks the unpacked arrays against it. The arrays are the payload.
+            np.savez(handle, **self.state_dict())  # type: ignore[arg-type]
+
+    def load(self, path: str | Path, strict: bool = True) -> None:
+        """Load parameters from an archive written by `save`."""
+        with np.load(path) as archive:
+            self.load_state_dict(
+                {name: archive[name] for name in archive.files}, strict=strict
+            )
+
+    # ------------------------------------------------------------------------ #
+    # Reporting
+    # ------------------------------------------------------------------------ #
     def summary(self) -> dict[str, Any]:
-        """Get a summary of the Module.
+        """Get a summary of the Module and its children.
+
+        Parameter shapes and counts rather than the parameters themselves, so that
+        printing a summary does not dump every weight matrix.
 
         Returns
         -------
@@ -79,12 +284,19 @@ class Module(ABC):
         """
         return {
             "name": self.name,
-            "parameters": self.parameters,
+            "parameters": {
+                name: parameter.shape for name, parameter in self.parameters.items()
+            },
+            "num_parameters": self.num_parameters(),
             "hyperparameters": self.hyperparameters,
+            "modules": [child.summary() for child in self._modules.values()],
         }
 
     def __call__(self, X: Tensor) -> Tensor:
         return self.forward(X)
+
+    def __repr__(self) -> str:
+        return f"{self.name}({self.num_parameters()} parameters)"
 
     @property
     @abstractmethod

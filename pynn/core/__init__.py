@@ -8,7 +8,6 @@ from .activation import Activation
 from .constants import EPSILON, MAXINT, MININT, PI, E
 from .initializer import Initializer
 from .loss import Loss
-from .model import Model
 from .module import Module
 from .optimizer import Optimizer
 from .tensor import Tensor
@@ -27,7 +26,6 @@ __all__ = [
     "Initializer",
     "List",
     "Loss",
-    "Model",
     "Module",
     "Number",
     "Optimizer",

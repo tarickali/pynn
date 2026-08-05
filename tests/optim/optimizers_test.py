@@ -235,7 +235,7 @@ def test_optimizer_reduces_loss(optimizer_cls):
 
     model = Sequential([Linear(4, 8, activation="tanh"), Linear(8, 1)])
     loss_fn = MeanSquaredError()
-    optimizer = optimizer_cls(model.parameters, learning_rate=0.05)
+    optimizer = optimizer_cls(model, learning_rate=0.05)
 
     first = float(loss_fn(y, model(X)).item())
     for _ in range(50):
@@ -272,8 +272,8 @@ def test_optimizer_reset_reproduces_trajectory(optimizer_cls):
 def test_optimizer_handles_lazily_built_parameters(optimizer_cls):
     """Layers build lazily, so parameters appear after the optimizer exists."""
     model = Sequential([Linear(4, 3)])
-    optimizer = optimizer_cls(model.parameters, learning_rate=0.1)
-    assert model.parameters == [{}]
+    optimizer = optimizer_cls(model, learning_rate=0.1)
+    assert model.parameter_groups() == [{}, {}]
 
     X = Tensor(np.random.default_rng(0).standard_normal((5, 4)))
     loss = MeanSquaredError()(Tensor(np.zeros((5, 3))), model(X))
@@ -309,7 +309,7 @@ def _trained_pair(optimizer_cls, freeze_first: bool, freeze_before_build: bool):
         if freeze_first:
             model.modules[0].freeze()
 
-    optimizer = optimizer_cls(model.parameters, learning_rate=0.1)
+    optimizer = optimizer_cls(model, learning_rate=0.1)
     loss_fn = MeanSquaredError()
 
     model(X)  # ensure built before snapshotting

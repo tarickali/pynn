@@ -9,10 +9,9 @@ Each optimizer is compared against a closed-form transcription of its published 
 rule rather than against a "loss went down" assertion, since a broken momentum buffer
 still descends, just more slowly.
 
-Some known limitations are deliberately not asserted here (`Module.freeze` is ignored by
-the optimizers, `Conv2d` bias is per-position rather than per-channel, and comparing
-Tensors returns a Tensor rather than a bool). Those are design issues rather than
-regressions; see PROJECT_REVIEW.md.
+The module-tree checks are here for the same reason: a container that loses track of a
+nested child does not raise, it just reports fewer parameters, and the layers it dropped
+silently never train.
 """
 
 from __future__ import annotations
@@ -27,7 +26,13 @@ from pynn.nn.losses import MeanSquaredError
 from pynn.optim import SGD, Adadelta, Adagrad, Adam, RMSprop
 from pynn.verify.report import CheckReport
 
-__all__ = ["check_api", "check_autodiff", "check_invariants", "check_optimizers"]
+__all__ = [
+    "check_api",
+    "check_autodiff",
+    "check_invariants",
+    "check_modules",
+    "check_optimizers",
+]
 
 ACTIVATION_NAMES = [
     "affine",
@@ -290,7 +295,7 @@ def check_optimizers() -> CheckReport:
         # Layers build their parameters on the first forward pass, so the optimizer
         # is constructed against dictionaries that are still empty.
         model = Sequential([Linear(4, 3)])
-        optimizer = optimizer_cls(model.parameters, learning_rate=0.1)
+        optimizer = optimizer_cls(model, learning_rate=0.1)
         X = Tensor(np.random.default_rng(0).standard_normal((5, 4)))
         loss = MeanSquaredError()(Tensor(np.zeros((5, 3))), model(X))
         model.zero_grad()
@@ -305,7 +310,7 @@ def check_optimizers() -> CheckReport:
         rng = np.random.default_rng(3)
         model = Sequential([Linear(4, 8, activation="tanh"), Linear(8, 1)])
         loss_fn = MeanSquaredError()
-        optimizer = optimizer_cls(model.parameters, learning_rate=0.05)
+        optimizer = optimizer_cls(model, learning_rate=0.05)
         X = Tensor(rng.standard_normal((16, 4)))
         y = Tensor(rng.standard_normal((16, 1)))
         first_loss = float(loss_fn(y, model(X)).item())
@@ -391,10 +396,108 @@ def check_api() -> CheckReport:
     return report
 
 
+def check_modules() -> CheckReport:
+    """Verify that the module tree composes: nesting, freezing, modes, checkpoints."""
+
+    report = CheckReport(name="modules")
+    X = Tensor(np.random.default_rng(0).standard_normal((5, 4)))
+
+    def build() -> Sequential:
+        return Sequential([Sequential([Linear(4, 3, activation="tanh")]), Linear(3, 2)])
+
+    flat = Sequential([Linear(4, 3, activation="tanh"), Linear(3, 2)])
+    deep = build()
+    flat(X)
+    deep(X)
+
+    # A container that loses a nested child reports fewer parameters and trains fewer
+    # layers, without raising anywhere.
+    report.add(
+        "a nested container reports every parameter",
+        flat.num_parameters() == deep.num_parameters() == 23,
+        f"flat {flat.num_parameters()}, nested {deep.num_parameters()}",
+    )
+    report.add(
+        "named_parameters uses dotted paths",
+        sorted(deep.named_parameters()) == ["0.0.W", "0.0.b", "1.W", "1.b"],
+        f"{sorted(deep.named_parameters())}",
+    )
+
+    # Nesting used to type-check and run the forward pass, then fail here.
+    try:
+        model = build()
+        optimizer = SGD(model, learning_rate=0.1)
+        loss_fn = MeanSquaredError()
+        y = Tensor(np.zeros((5, 2)))
+        first = float(loss_fn(y, model(X)).item())
+        for _ in range(20):
+            loss = loss_fn(y, model(X))
+            model.zero_grad()
+            loss.backward()
+            optimizer.update()
+        last = float(loss_fn(y, model(X)).item())
+        report.add(
+            "a nested container trains", last < first, f"{first:.4f} -> {last:.4f}"
+        )
+    except Exception as error:
+        report.add(
+            "a nested container trains",
+            False,
+            f"raised {type(error).__name__}: {error}",
+        )
+
+    # Freezing has to reach descendants, and the optimizer has to honor it.
+    model = build()
+    model(X)
+    model[0].freeze()
+    before = model.state_dict()
+    optimizer = SGD(model, learning_rate=0.5)
+    loss = MeanSquaredError()(Tensor(np.zeros((5, 2))), model(X))
+    model.zero_grad()
+    loss.backward()
+    optimizer.update()
+    after = model.state_dict()
+    report.add(
+        "freezing a branch excludes it from the update",
+        bool(np.array_equal(before["0.0.W"], after["0.0.W"]))
+        and not np.array_equal(before["1.W"], after["1.W"]),
+    )
+    report.add(
+        "a frozen parameter still receives a gradient",
+        bool(np.any(model.named_parameters()["0.0.W"].grad != 0.0)),
+    )
+
+    # Modes propagate, or Dropout and the normalization layers keep training behavior
+    # during evaluation.
+    model = build()
+    model.eval()
+    report.add(
+        "eval propagates through the tree",
+        all(not module.training for _, module in model.named_modules()),
+    )
+    model.train()
+    report.add(
+        "train propagates through the tree",
+        all(module.training for _, module in model.named_modules()),
+    )
+
+    # A checkpoint has to reproduce the model's outputs exactly.
+    source, target = build(), build()
+    source(X)
+    target(X)
+    target.load_state_dict(source.state_dict())
+    report.add(
+        "a state dict round trips",
+        bool(np.allclose(source(X).data, target(X).data)),
+    )
+
+    return report
+
+
 def check_invariants() -> CheckReport:
-    """Run the autodiff, optimizer, and API invariant checks together."""
+    """Run the autodiff, optimizer, module, and API invariant checks together."""
 
     report = CheckReport(name="invariants")
-    for suite in (check_autodiff(), check_optimizers(), check_api()):
+    for suite in (check_autodiff(), check_optimizers(), check_modules(), check_api()):
         report.extend(suite)
     return report

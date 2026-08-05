@@ -27,7 +27,7 @@ def regression():
     )
 
     loss_fn = MeanSquaredError()
-    optimizer = SGD(model.parameters, learning_rate=0.01)
+    optimizer = SGD(model, learning_rate=0.01)
 
     EPOCHS = 300
     history = []

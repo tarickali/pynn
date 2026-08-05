@@ -1,4 +1,4 @@
-from pynn.core import Model, Module
+from pynn.core import Module
 from pynn.nn.activations import (
     ELU,
     SELU,
@@ -46,7 +46,6 @@ __all__ = [
     "MSELoss",
     "MeanAbsoluteError",
     "MeanSquaredError",
-    "Model",
     # Core
     "Module",
     "ReLU",

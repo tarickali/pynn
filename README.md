@@ -55,7 +55,7 @@ model = Sequential([
 ])
 
 loss_fn = MeanSquaredError()
-optimizer = SGD(model.parameters, learning_rate=0.01)
+optimizer = SGD(model, learning_rate=0.01)
 
 # Training step (one batch)
 X = Tensor(np.random.randn(32, 10).astype(np.float64))
@@ -74,7 +74,7 @@ optimizer.update()
 
 | Area | Contents |
 |------|----------|
-| **`pynn.core`** | `Tensor` (autograd), `Module`, `Model`, `Loss`, `Optimizer`, `Activation`, `Initializer`, types, constants. |
+| **`pynn.core`** | `Tensor` (autograd), `Module` (the layer/container tree), `Loss`, `Optimizer`, `Activation`, `Initializer`, types, constants. |
 | **`pynn.core.math`** | `abs`, `sum`, `mean`, `exp`, `log` (import as a module — these shadow builtins). |
 | **`pynn.core.utils`** | `unbroadcast`, `matrix_multiply_gradients` (backward-pass shape plumbing). |
 | **`pynn.core.numeric`** | `stable_sigmoid` (overflow-free kernel shared by the activations and losses). |
@@ -204,11 +204,11 @@ python -m pynn.verify stability    # one suite
 ```
 
 ```
-gradients: 111/111 passed (OK)
-invariants: 56/56 passed (OK)
+gradients: 132/132 passed (OK)
+invariants: 64/64 passed (OK)
 stability: 20/20 passed (OK)
 
-pynn.verify: 187/187 passed (OK)
+pynn.verify: 216/216 passed (OK)
 ```
 
 Three suites:

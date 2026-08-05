@@ -1,6 +1,7 @@
 import numpy as np
 
-from pynn.core import Optimizer, Tensor
+from pynn.core import Optimizer
+from pynn.core.optimizer import ParameterSource
 from pynn.utils.tensor import get_data_and_grad
 
 __all__ = ["Adagrad"]
@@ -11,7 +12,7 @@ class Adagrad(Optimizer):
 
     def __init__(
         self,
-        parameters: list[dict[str, Tensor]],
+        parameters: ParameterSource,
         learning_rate: float = 0.01,
         lr: float | None = None,
         learning_rate_decay: float = 0.0,
