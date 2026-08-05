@@ -157,6 +157,13 @@ mypy                  # type check (files are configured in pyproject.toml)
 `ruff check` and `mypy` are both clean across `pynn`, `tests`, `examples`, and
 `scripts`.
 
+### Continuous integration
+
+Every push and pull request to `main` runs the same four checks across Python
+3.10–3.13 on GitHub Actions: `ruff check`, `ruff format --check`, `mypy`,
+`pytest -m "not external"`, and `python -m pynn.verify`. The workflow lives at
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+
 ---
 
 ## Reproducibility
