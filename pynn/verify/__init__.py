@@ -40,11 +40,15 @@ be run against an installed copy of PyNN without pytest or the test files presen
 """
 
 from pynn.verify.gradients import (
+    DEFAULT_SEED,
     GradCheckResult,
+    GradientCase,
     InputCheck,
     analytic_gradient,
     check_all_gradients,
+    check_case,
     check_gradients,
+    gradient_cases,
     numerical_gradient,
 )
 from pynn.verify.invariants import (
@@ -57,18 +61,22 @@ from pynn.verify.report import CheckReport, CheckResult
 from pynn.verify.stability import check_stability
 
 __all__ = [
+    "DEFAULT_SEED",
     "CheckReport",
     "CheckResult",
     "GradCheckResult",
+    "GradientCase",
     "InputCheck",
     "analytic_gradient",
     "check_all_gradients",
     "check_api",
     "check_autodiff",
+    "check_case",
     "check_gradients",
     "check_invariants",
     "check_optimizers",
     "check_stability",
+    "gradient_cases",
     "numerical_gradient",
     "run_all",
 ]

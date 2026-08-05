@@ -32,14 +32,18 @@ from pynn.functional.losses import (
     mean_squared_error,
 )
 from pynn.functional.modules import conv2d, flatten, linear
-from pynn.verify.report import CheckReport
+from pynn.verify.report import CheckReport, CheckResult
 
 __all__ = [
+    "DEFAULT_SEED",
     "GradCheckResult",
+    "GradientCase",
     "InputCheck",
     "analytic_gradient",
     "check_all_gradients",
+    "check_case",
     "check_gradients",
+    "gradient_cases",
     "numerical_gradient",
 ]
 
@@ -47,6 +51,35 @@ __all__ = [
 ScalarFn = Callable[[list[Tensor]], Tensor]
 #: A single-argument tensor op, or a factory producing random inputs for one.
 TensorFn = Callable[..., Tensor]
+#: Seed for `gradient_cases`. Fixed so that a failure is reproducible.
+DEFAULT_SEED = 20240605
+
+
+@dataclass(frozen=True)
+class GradientCase:
+    """One named gradient check: a scalar function and the inputs to differentiate.
+
+    `gradient_cases` returns these so that callers can drive the sweep themselves —
+    `tests/test_gradcheck.py` turns each into a separate pytest case so that a failure
+    names the operation, rather than reporting one failure for the whole sweep.
+    """
+
+    name: str
+    fn: ScalarFn
+    inputs: list[Tensor]
+    #: Central-difference step. Cases with large-magnitude inputs need a larger step,
+    #: because the difference of two nearby large values loses significant digits.
+    eps: float = 1e-6
+    rtol: float = 1e-5
+
+    @property
+    def id(self) -> str:
+        """The name as a pytest-friendly identifier.
+
+        >>> GradientCase("add (3, 4)+(4,)", lambda ts: ts[0], []).id
+        'add-(3,4)+(4,)'
+        """
+        return self.name.replace(", ", ",").replace(" ", "-")
 
 
 @dataclass
@@ -263,6 +296,15 @@ def _contract_with_reuse(op: TensorFn) -> ScalarFn:
     return scalar
 
 
+def _contract_binary(op: TensorFn) -> ScalarFn:
+    """``sum(op(a, b))`` for a binary operator."""
+
+    def scalar(ts: list[Tensor]) -> Tensor:
+        return pmath.sum(op(ts[0], ts[1]))
+
+    return scalar
+
+
 def _contract_binary_with_reuse(op: TensorFn) -> ScalarFn:
     """``sum(op(a, b) * c) + sum(a * d)`` — the reuse check for a binary operator."""
 
@@ -281,8 +323,30 @@ def _conv2d_case(stride: tuple[int, int], padding: tuple[int, int]) -> ScalarFn:
     return scalar
 
 
-def _gradient_cases(seed: int) -> list[tuple[str, ScalarFn, list[Tensor]]]:
-    """Build the (name, function, inputs) sweep over every shipped operation."""
+def gradient_cases(seed: int = DEFAULT_SEED) -> list[GradientCase]:
+    """Build the gradient-check sweep over every operation the library ships with.
+
+    Covers each operator across broadcasting and matmul shape combinations, every math
+    function and activation, every loss in both its logits and probability forms, the
+    module functions across strides and paddings, and graph topologies where a tensor
+    has more than one consumer.
+
+    Every unary and binary op appears twice: once in isolation, and once with its input
+    also feeding a second consumer. The second form is the one that catches a reverse
+    pass which assigns to `grad` instead of accumulating into it, since the
+    single-consumer form yields an exactly correct gradient either way.
+
+    Parameters
+    ----------
+    seed : int, default DEFAULT_SEED
+        Seed for the random inputs.
+
+    Returns
+    -------
+    list[GradientCase]
+        Independent cases. Inputs may be reused across `check_gradients` calls, which
+        zeroes gradients before each pass and restores perturbed data afterwards.
+    """
 
     rng = np.random.default_rng(seed)
 
@@ -298,6 +362,8 @@ def _gradient_cases(seed: int) -> list[tuple[str, ScalarFn, list[Tensor]]]:
         return Tensor(rng.uniform(0.5, 3.0, shape))
 
     cases: list[tuple[str, ScalarFn, list[Tensor]]] = []
+    # Collected separately because they need a larger central-difference step.
+    scale_cases: list[tuple[str, ScalarFn, list[Tensor]]] = []
 
     # Operators, including the broadcasting shape combinations.
     for left, right in [
@@ -306,30 +372,30 @@ def _gradient_cases(seed: int) -> list[tuple[str, ScalarFn, list[Tensor]]]:
         ((3, 4), (1, 4)),
         ((3, 1), (1, 4)),
         ((2, 3, 4), (3, 4)),
+        ((2, 3, 4), (1, 1, 4)),
         ((5,), ()),
     ]:
         shapes = f"{left}+{right}"
-        cases += [
-            (
-                f"add {shapes}",
-                lambda ts: pmath.sum(ts[0] + ts[1]),
-                [normal(*left), normal(*right)],
-            ),
-            (
-                f"sub {shapes}",
-                lambda ts: pmath.sum(ts[0] - ts[1]),
-                [normal(*left), normal(*right)],
-            ),
-            (
-                f"mul {shapes}",
-                lambda ts: pmath.sum(ts[0] * ts[1]),
-                [normal(*left), normal(*right)],
-            ),
-        ]
+        for op_name, op in [
+            ("add", lambda a, b: a + b),
+            ("sub", lambda a, b: a - b),
+            ("mul", lambda a, b: a * b),
+            # Several ops over the same two operands, so both broadcast reductions and
+            # accumulation across operators have to be right simultaneously.
+            ("mixed", lambda a, b: a + b * a - b),
+        ]:
+            cases.append(
+                (
+                    f"{op_name} {shapes}",
+                    _contract_binary(op),
+                    [normal(*left), normal(*right)],
+                )
+            )
 
     # matmul, covering vector promotion and batch broadcasting.
     for left, right in [
         ((3, 4), (4, 2)),
+        ((1, 4), (4, 1)),
         ((4,), (4, 2)),
         ((3, 4), (4,)),
         ((4,), (4,)),
@@ -352,9 +418,19 @@ def _gradient_cases(seed: int) -> list[tuple[str, ScalarFn, list[Tensor]]]:
             [normal(3, 4), positive(4)],
         ),
         (
+            "rtruediv by a scalar",
+            lambda ts: pmath.sum(2.0 / ts[0]),
+            [positive(3, 4)],
+        ),
+        (
             "transpose into matmul",
             lambda ts: pmath.sum(ts[0].T @ ts[1]),
             [normal(3, 4), normal(3, 2)],
+        ),
+        (
+            "transpose with explicit axes",
+            lambda ts: pmath.sum(ts[0].transpose((2, 0, 1)) * ts[1]),
+            [normal(2, 3, 4), normal(4, 2, 3)],
         ),
     ]
 
@@ -377,6 +453,7 @@ def _gradient_cases(seed: int) -> list[tuple[str, ScalarFn, list[Tensor]]]:
         ("sigmoid", F.sigmoid, normal),
         ("tanh", F.tanh, normal),
         ("elu", F.elu, away_from_zero),
+        ("elu alpha=0.5", lambda x: F.elu(x, 0.5), away_from_zero),
         ("selu", F.selu, away_from_zero),
         ("softplus", F.softplus, normal),
         ("softmax", F.softmax, normal),
@@ -401,6 +478,29 @@ def _gradient_cases(seed: int) -> list[tuple[str, ScalarFn, list[Tensor]]]:
                 f"{name} with a reused input",
                 _contract_with_reuse(op),
                 [domain(*square), normal(*square), normal(*square)],
+            )
+        )
+
+    # The activations again at magnitudes where a naive implementation overflows. The
+    # stability suite checks the results are finite; these check they are also *right*,
+    # which a saturating approximation would not be.
+    def at_scale(*shape: int) -> Tensor:
+        magnitude = rng.uniform(20.0, 60.0, shape)
+        return Tensor(magnitude * rng.choice([-1.0, 1.0], shape))
+
+    for name, activation in [
+        ("sigmoid", F.sigmoid),
+        ("tanh", F.tanh),
+        ("elu", F.elu),
+        ("selu", F.selu),
+        ("softplus", F.softplus),
+        ("softmax", F.softmax),
+    ]:
+        scale_cases.append(
+            (
+                f"{name} at large magnitudes",
+                _contract(activation),
+                [at_scale(*square), normal(*square)],
             )
         )
 
@@ -494,11 +594,13 @@ def _gradient_cases(seed: int) -> list[tuple[str, ScalarFn, list[Tensor]]]:
                 [normal(2, 2, 5, 5), normal(3, 2, 3, 3)],
             )
         )
+    # The bias is per output channel and broadcasts over the spatial axes, so its
+    # gradient has to sum over batch *and* position.
     cases.append(
         (
-            "conv2d with bias",
+            "conv2d with a per-channel bias",
             lambda ts: pmath.sum(conv2d(ts[0], ts[1], ts[2])),
-            [normal(2, 2, 4, 4), normal(3, 2, 3, 3), normal(3, 2, 2)],
+            [normal(2, 2, 4, 4), normal(3, 2, 3, 3), normal(3, 1, 1)],
         )
     )
 
@@ -556,39 +658,50 @@ def _gradient_cases(seed: int) -> list[tuple[str, ScalarFn, list[Tensor]]]:
 
     cases.append(("graph auxiliary loss", auxiliary_loss, [normal(4, 3), normal(3, 2)]))
 
-    return cases
+    built = [GradientCase(name, fn, inputs) for name, fn, inputs in cases]
+    # Differencing two values around x=50 with eps=1e-6 leaves almost no significant
+    # digits, so the large-magnitude cases get a coarser step and looser tolerance.
+    built += [
+        GradientCase(name, fn, inputs, eps=1e-4, rtol=1e-4)
+        for name, fn, inputs in scale_cases
+    ]
+    return built
 
 
-def check_all_gradients(seed: int = 20240605, rtol: float = 1e-5) -> CheckReport:
+def check_case(case: GradientCase) -> CheckResult:
+    """Run one `GradientCase`, converting a raised exception into a failed result."""
+
+    try:
+        result = check_gradients(case.fn, case.inputs, eps=case.eps, rtol=case.rtol)
+    except Exception as error:
+        # Broad on purpose: a raised exception is reported as a failed check, not
+        # re-raised, so the rest of the sweep can still run.
+        return CheckResult(case.name, False, f"raised {type(error).__name__}: {error}")
+    return CheckResult(
+        case.name,
+        result.passed,
+        f"max relative error {result.max_relative_error:.2e}",
+    )
+
+
+def check_all_gradients(seed: int = DEFAULT_SEED) -> CheckReport:
     """Gradient-check every operation the library ships with.
-
-    Covers each operator across broadcasting shape combinations, every math function
-    and activation, every loss in both its logits and probability forms, the module
-    functions, and graph topologies where a tensor has multiple consumers.
 
     Parameters
     ----------
-    seed : int, default 20240605
+    seed : int, default DEFAULT_SEED
         Seed for the random inputs, so a failure is reproducible.
-    rtol : float, default 1e-5
-        Relative tolerance passed to `check_gradients`.
 
     Returns
     -------
     CheckReport
         One result per case, named after the operation being checked.
+
+    See Also
+    --------
+    gradient_cases : The cases this runs, for driving them individually.
     """
 
     report = CheckReport(name="gradients")
-    for name, fn, inputs in _gradient_cases(seed):
-        try:
-            result = check_gradients(fn, inputs, rtol=rtol)
-        except Exception as error:
-            report.add(name, False, f"raised {type(error).__name__}: {error}")
-        else:
-            report.add(
-                name,
-                result.passed,
-                f"max relative error {result.max_relative_error:.2e}",
-            )
+    report.results.extend(check_case(case) for case in gradient_cases(seed))
     return report
