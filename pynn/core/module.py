@@ -33,6 +33,11 @@ class Module(ABC):
         self._modules: dict[str, Module] = {}
         self.name: str = self.__class__.__name__
         self.parameters: dict[str, Tensor] = {}
+        #: State that belongs to the module but is not optimized — batch
+        #: normalization's running statistics. Saved and loaded with the parameters,
+        #: because a model whose running statistics are lost evaluates differently
+        #: after a round trip, but never handed to an optimizer.
+        self._buffers: dict[str, Array] = {}
         self.trainable: bool = True
         self.training: bool = True
         self.initialized: bool = False
@@ -117,6 +122,23 @@ class Module(ABC):
         self.parameters[name] = tensor
         return tensor
 
+    def register_buffer(self, name: str, value: Array) -> Array:
+        """Register non-optimized state under `name` and return it.
+
+        Buffers are updated in place by the layer that owns them, so the array handed
+        back stays the live one across a `load_state_dict`.
+        """
+        self._buffers[name] = np.asarray(value)
+        return self._buffers[name]
+
+    def named_buffers(self) -> dict[str, Array]:
+        """Every buffer in the tree, keyed by dotted path."""
+        return {
+            f"{prefix}.{name}" if prefix else name: buffer
+            for prefix, module in self.named_modules()
+            for name, buffer in module._buffers.items()
+        }
+
     def named_parameters(self) -> dict[str, Tensor]:
         """Every parameter in the tree, keyed by dotted path.
 
@@ -195,19 +217,26 @@ class Module(ABC):
     # Checkpointing
     # ------------------------------------------------------------------------ #
     def state_dict(self) -> dict[str, Array]:
-        """Copies of every parameter's data, keyed by the same dotted paths as
-        `named_parameters`.
+        """Copies of every parameter and buffer, keyed by dotted path.
 
-        Copies rather than views, so that a checkpoint taken mid-training is a
-        snapshot and not a live reference to weights that keep moving.
+        Buffers are included because a batch-normalized model whose running statistics
+        were dropped evaluates differently after a round trip — the weights alone are
+        not the whole model.
+
+        Copies rather than views, so that a checkpoint taken mid-training is a snapshot
+        and not a live reference to values that keep moving.
         """
-        return {
+        state = {
             name: parameter.data.copy()
             for name, parameter in self.named_parameters().items()
         }
+        state.update(
+            (name, buffer.copy()) for name, buffer in self.named_buffers().items()
+        )
+        return state
 
     def load_state_dict(self, state: Mapping[str, Array], strict: bool = True) -> None:
-        """Copy `state` into this module's parameters in place.
+        """Copy `state` into this module's parameters and buffers in place.
 
         Parameters are created by `build` on the first forward pass, so a model that
         has not run one yet has nothing to load into. Run a forward pass (or call
@@ -230,8 +259,10 @@ class Module(ABC):
             `strict` is False, since a silent shape mismatch loads a different model.
         """
         parameters = self.named_parameters()
-        missing = sorted(set(parameters) - set(state))
-        unexpected = sorted(set(state) - set(parameters))
+        buffers = self.named_buffers()
+        known = set(parameters) | set(buffers)
+        missing = sorted(known - set(state))
+        unexpected = sorted(set(state) - known)
         if strict and (missing or unexpected):
             raise KeyError(
                 f"state does not match this module: missing {missing}, "
@@ -239,16 +270,22 @@ class Module(ABC):
             )
 
         for name, value in state.items():
-            parameter = parameters.get(name)
-            if parameter is None:
+            target = parameters.get(name)
+            current = target.data if target is not None else buffers.get(name)
+            if current is None:
                 continue
             array = np.asarray(value)
-            if array.shape != parameter.shape:
+            if array.shape != current.shape:
                 raise ValueError(
-                    f"parameter {name!r} has shape {parameter.shape} but the state "
-                    f"holds shape {array.shape}"
+                    f"{name!r} has shape {current.shape} but the state holds shape "
+                    f"{array.shape}"
                 )
-            parameter.data = array.astype(parameter.dtype, copy=True)
+            if target is not None:
+                target.data = array.astype(target.dtype, copy=True)
+            else:
+                # In place, so that a layer holding a reference to its own buffer sees
+                # the loaded values.
+                current[...] = array
 
     def save(self, path: str | Path) -> None:
         """Write `state_dict` to `path` as an uncompressed `.npz` archive.

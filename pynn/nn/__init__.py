@@ -17,7 +17,18 @@ from pynn.nn.losses import (
     MeanSquaredError,
 )
 from pynn.nn.models import Sequential
-from pynn.nn.modules import Activation, Conv2d, Flatten, Linear
+from pynn.nn.modules import (
+    Activation,
+    AvgPool2d,
+    BatchNorm1d,
+    BatchNorm2d,
+    Conv2d,
+    Dropout,
+    Flatten,
+    LayerNorm,
+    Linear,
+    MaxPool2d,
+)
 
 # PyTorch-style aliases
 BCELoss = BinaryCrossentropy
@@ -30,20 +41,26 @@ __all__ = [
     "SELU",
     "Activation",
     "Affine",
+    "AvgPool2d",
     # PyTorch-style loss aliases
     "BCELoss",
+    "BatchNorm1d",
+    "BatchNorm2d",
     # Losses
     "BinaryCrossentropy",
     "CategoricalCrossentropy",
     "Conv2d",
     "CrossEntropyLoss",
+    "Dropout",
     "Flatten",
     # Activations
     "Identity",
     "L1Loss",
+    "LayerNorm",
     # Layers / containers
     "Linear",
     "MSELoss",
+    "MaxPool2d",
     "MeanAbsoluteError",
     "MeanSquaredError",
     # Core

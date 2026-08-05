@@ -1,10 +1,23 @@
+from __future__ import annotations
+
 import numpy as np
 
 from pynn.core import Tensor
+from pynn.core.random import default_rng
+from pynn.core.types import Array, Shape
 from pynn.core.utils import unbroadcast
 from pynn.utils.array import col2im, im2col, pad_for_conv
 
-__all__ = ["conv2d", "flatten", "linear"]
+__all__ = [
+    "avg_pool2d",
+    "batch_norm",
+    "conv2d",
+    "dropout",
+    "flatten",
+    "layer_norm",
+    "linear",
+    "max_pool2d",
+]
 
 
 def linear(X: Tensor, W: Tensor, b: Tensor | None) -> Tensor:
@@ -113,4 +126,391 @@ def conv2d(
 
     output.reverse = reverse
     output.forward = "conv2d"
+    return output
+
+
+def dropout(
+    x: Tensor,
+    p: float = 0.5,
+    training: bool = True,
+    rng: int | np.random.Generator | None = None,
+) -> Tensor:
+    """Randomly zero elements of `x` during training, rescaling the survivors.
+
+    Inverted dropout: the kept elements are divided by the keep probability, so the
+    expected value of the output matches the input and evaluation needs no
+    compensating factor. That is why `training=False` is exactly the identity and not
+    "the same thing scaled by p".
+
+    Parameters
+    ----------
+    x : Tensor
+        Input of any shape.
+    p : float, default 0.5
+        Probability of zeroing each element, in [0, 1].
+    training : bool, default True
+        When False, returns `x` unchanged. `nn.Dropout` passes `self.training`.
+    rng : int | np.random.Generator | None
+        Seed or generator for the mask. The default draws from the shared generator
+        that `pynn.core.random.set_seed` controls.
+
+    Returns
+    -------
+    Tensor
+        Same shape as `x`.
+
+    Raises
+    ------
+    ValueError
+        If `p` is outside [0, 1].
+    """
+    if not 0.0 <= p <= 1.0:
+        raise ValueError(f"dropout probability must be in [0, 1], got {p}")
+    if not training or p == 0.0:
+        return x
+
+    keep = 1.0 - p
+    if keep == 0.0:
+        mask = np.zeros(x.shape, dtype=x.dtype)
+    else:
+        mask = (default_rng(rng).random(x.shape) < keep).astype(x.dtype) / keep
+
+    output = Tensor(mask * x.data)
+    output.add_children((x,))
+
+    def reverse() -> None:
+        # The mask is a constant here, so the gradient is routed through exactly the
+        # elements that survived, scaled the same way the forward pass scaled them.
+        x.grad += mask * output.grad
+
+    output.forward = "dropout"
+    output.reverse = reverse
+
+    return output
+
+
+def _normalize(
+    x: Tensor,
+    gamma: Tensor | None,
+    beta: Tensor | None,
+    mean: Array,
+    variance: Array,
+    axes: tuple[int, ...],
+    eps: float,
+    name: str,
+    differentiate_statistics: bool,
+) -> Tensor:
+    """Shared core of `layer_norm` and `batch_norm`.
+
+    The two differ only in which axes the statistics are taken over, and in whether
+    those statistics depend on `x` at all: batch normalization at evaluation time uses
+    fixed running estimates, which makes it an affine function of `x` and its gradient
+    the simple `dy * gamma / std`.
+
+    The training-time gradient is the standard fused form,
+
+        dx = (dxhat - mean(dxhat) - xhat * mean(dxhat * xhat)) / std
+
+    where the means are over the normalized axes. Written out rather than composed from
+    primitives because the mean and the variance both depend on every element of `x`,
+    so the naive graph re-derives that dependency once per element.
+    """
+    inverse_std = 1.0 / np.sqrt(variance + eps)
+    centered = x.data - mean
+    normalized = centered * inverse_std
+    scale = None if gamma is None else gamma.data
+
+    data = normalized if scale is None else normalized * scale
+    if beta is not None:
+        data = data + beta.data
+
+    output = Tensor(data)
+    children: tuple[Tensor, ...] = (x,)
+    if gamma is not None:
+        children += (gamma,)
+    if beta is not None:
+        children += (beta,)
+    output.add_children(children)
+
+    def reverse() -> None:
+        upstream = output.grad
+        if beta is not None:
+            beta.grad += unbroadcast(upstream, beta.shape)
+        if gamma is not None:
+            gamma.grad += unbroadcast(upstream * normalized, gamma.shape)
+
+        d_normalized = upstream if scale is None else upstream * scale
+        if differentiate_statistics:
+            # The two subtracted means are the paths through the mean and the variance;
+            # both are exact for the biased variance numpy's `var` computes.
+            x.grad += (
+                d_normalized
+                - d_normalized.mean(axis=axes, keepdims=True)
+                - normalized
+                * (d_normalized * normalized).mean(axis=axes, keepdims=True)
+            ) * inverse_std
+        else:
+            x.grad += d_normalized * inverse_std
+
+    output.forward = name
+    output.reverse = reverse
+
+    return output
+
+
+def layer_norm(
+    x: Tensor,
+    gamma: Tensor | None = None,
+    beta: Tensor | None = None,
+    normalized_shape: Shape | None = None,
+    eps: float = 1e-5,
+) -> Tensor:
+    """Normalize each example over its trailing axes, then scale and shift.
+
+    Unlike batch normalization, the statistics are per example, so the result does not
+    depend on what else is in the batch and training and evaluation are the same
+    computation. That is the reason it is the default in sequence models, where the
+    batch axis is not the one carrying comparable statistics.
+
+    Parameters
+    ----------
+    x : Tensor
+        Input of shape `(..., *normalized_shape)`.
+    gamma, beta : Tensor | None
+        Learnable scale and shift, broadcastable against `normalized_shape`.
+    normalized_shape : Shape | None
+        Trailing axes to normalize over. Defaults to the last axis.
+    eps : float, default 1e-5
+        Added to the variance before the square root.
+
+    Returns
+    -------
+    Tensor
+        Same shape as `x`.
+    """
+    if normalized_shape is None:
+        normalized_shape = (x.shape[-1],)
+    axes = tuple(range(x.ndim - len(normalized_shape), x.ndim))
+    if x.shape[len(x.shape) - len(normalized_shape) :] != tuple(normalized_shape):
+        raise ValueError(
+            f"input of shape {x.shape} does not end with normalized_shape "
+            f"{tuple(normalized_shape)}"
+        )
+
+    mean = x.data.mean(axis=axes, keepdims=True)
+    variance = x.data.var(axis=axes, keepdims=True)
+    return _normalize(x, gamma, beta, mean, variance, axes, eps, "layer_norm", True)
+
+
+def batch_norm(
+    x: Tensor,
+    gamma: Tensor | None = None,
+    beta: Tensor | None = None,
+    running_mean: Array | None = None,
+    running_var: Array | None = None,
+    training: bool = True,
+    momentum: float = 0.1,
+    eps: float = 1e-5,
+) -> Tensor:
+    """Normalize each feature over the batch (and any spatial axes), scale, and shift.
+
+    Axes are taken to be every axis except axis 1, so `(N, C)` normalizes over the
+    batch and `(N, C, H, W)` normalizes over the batch and both spatial axes — one
+    statistic per channel either way.
+
+    Parameters
+    ----------
+    x : Tensor
+        Input of shape `(batch, features, ...)`.
+    gamma, beta : Tensor | None
+        Learnable scale and shift, shaped to broadcast against `x` along axis 1.
+    running_mean, running_var : Array | None
+        Running estimates, updated in place during training and used in place of the
+        batch statistics at evaluation time. Updated in place because they are buffers
+        the module owns, not parameters the optimizer steps.
+    training : bool, default True
+        Use the batch statistics and update the running ones, rather than reading them.
+    momentum : float, default 0.1
+        Weight of the current batch in the running estimates, matching PyTorch's
+        convention (`new = (1 - momentum) * old + momentum * batch`).
+    eps : float, default 1e-5
+        Added to the variance before the square root.
+
+    Returns
+    -------
+    Tensor
+        Same shape as `x`.
+    """
+    axes = (0, *range(2, x.ndim))
+    statistics_shape = tuple(1 if axis != 1 else x.shape[1] for axis in range(x.ndim))
+
+    if training or running_mean is None or running_var is None:
+        mean = x.data.mean(axis=axes, keepdims=True)
+        variance = x.data.var(axis=axes, keepdims=True)
+        if running_mean is not None and running_var is not None:
+            count = int(np.prod([x.shape[axis] for axis in axes]))
+            # The running variance tracks the unbiased estimate, as PyTorch does, so
+            # that evaluation on a single batch is not biased low by 1/count.
+            unbiased = variance * count / (count - 1) if count > 1 else variance
+            running_mean *= 1.0 - momentum
+            running_mean += momentum * mean.reshape(running_mean.shape)
+            running_var *= 1.0 - momentum
+            running_var += momentum * unbiased.reshape(running_var.shape)
+    else:
+        mean = running_mean.reshape(statistics_shape)
+        variance = running_var.reshape(statistics_shape)
+
+    return _normalize(x, gamma, beta, mean, variance, axes, eps, "batch_norm", training)
+
+
+def _pool_windows(
+    x: Tensor,
+    kernel_size: tuple[int, int],
+    stride: tuple[int, int],
+    padding: tuple[int, int],
+    fill: float,
+) -> tuple[Array, tuple[int, int], tuple[int, int, int, int]]:
+    """Each channel's sliding windows as rows: `(batch * ch * out_h * out_w, kh * kw)`.
+
+    Pooling acts on each channel independently, so the channels are folded into the
+    batch axis and `im2col` — which unrolls windows across channels for a convolution —
+    unrolls one channel per row here.
+    """
+    batch, channels, height, width = (
+        x.shape[0],
+        x.shape[1],
+        x.shape[2],
+        x.shape[3],
+    )
+    kh, kw = kernel_size
+    sh, sw = stride
+    ph, pw = padding
+
+    merged_shape = (batch * channels, 1, height, width)
+    merged = x.data.reshape(merged_shape)
+    padded = pad_for_conv(merged, ph, pw, value=fill)
+    out_h = (height + 2 * ph - kh) // sh + 1
+    out_w = (width + 2 * pw - kw) // sw + 1
+
+    return (
+        im2col(padded, kernel_size, stride, (out_h, out_w)),
+        (out_h, out_w),
+        merged_shape,
+    )
+
+
+def _check_pool_shape(x: Tensor, name: str) -> None:
+    if x.ndim != 4:
+        raise ValueError(
+            f"{name} expects an input of shape (batch, channels, height, width), "
+            f"got {x.shape}"
+        )
+
+
+def max_pool2d(
+    x: Tensor,
+    kernel_size: tuple[int, int] = (2, 2),
+    stride: tuple[int, int] | None = None,
+    padding: tuple[int, int] = (0, 0),
+) -> Tensor:
+    """Take the maximum over each sliding window of every channel.
+
+    The reverse pass routes each output's gradient to the single input position that
+    won its window, and adds where windows overlap. Ties go to the first position, as
+    they do in PyTorch; the function is not differentiable there in any case.
+
+    Parameters
+    ----------
+    x : Tensor
+        Input of shape `(batch, channels, height, width)`.
+    kernel_size : tuple[int, int], default (2, 2)
+        Window height and width.
+    stride : tuple[int, int] | None
+        Window step. Defaults to `kernel_size`, giving non-overlapping windows.
+    padding : tuple[int, int], default (0, 0)
+        Padding per side, filled with negative infinity so it can never win a window.
+
+    Returns
+    -------
+    Tensor
+        Output of shape `(batch, channels, out_h, out_w)`.
+    """
+    _check_pool_shape(x, "max_pool2d")
+    stride = kernel_size if stride is None else stride
+    cols, out_size, merged_shape = _pool_windows(
+        x, kernel_size, stride, padding, -np.inf
+    )
+
+    batch, channels = x.shape[0], x.shape[1]
+    out_h, out_w = out_size
+    rows = np.arange(cols.shape[0])
+    argmax = cols.argmax(axis=1)
+    data = cols[rows, argmax].reshape(batch, channels, out_h, out_w)
+
+    output = Tensor(data)
+    output.add_children((x,))
+
+    def reverse() -> None:
+        column_gradient = np.zeros(cols.shape, dtype=output.grad.dtype)
+        column_gradient[rows, argmax] = output.grad.reshape(-1)
+        x.grad += col2im(
+            column_gradient, merged_shape, kernel_size, stride, padding, out_size
+        ).reshape(x.shape)
+
+    output.forward = "max_pool2d"
+    output.reverse = reverse
+
+    return output
+
+
+def avg_pool2d(
+    x: Tensor,
+    kernel_size: tuple[int, int] = (2, 2),
+    stride: tuple[int, int] | None = None,
+    padding: tuple[int, int] = (0, 0),
+) -> Tensor:
+    """Average over each sliding window of every channel.
+
+    Padded positions are counted in the denominator, matching PyTorch's default
+    `count_include_pad=True`.
+
+    Parameters
+    ----------
+    x : Tensor
+        Input of shape `(batch, channels, height, width)`.
+    kernel_size : tuple[int, int], default (2, 2)
+        Window height and width.
+    stride : tuple[int, int] | None
+        Window step. Defaults to `kernel_size`.
+    padding : tuple[int, int], default (0, 0)
+        Zero padding per side.
+
+    Returns
+    -------
+    Tensor
+        Output of shape `(batch, channels, out_h, out_w)`.
+    """
+    _check_pool_shape(x, "avg_pool2d")
+    stride = kernel_size if stride is None else stride
+    cols, out_size, merged_shape = _pool_windows(x, kernel_size, stride, padding, 0.0)
+
+    batch, channels = x.shape[0], x.shape[1]
+    out_h, out_w = out_size
+    window = kernel_size[0] * kernel_size[1]
+    data = cols.mean(axis=1).reshape(batch, channels, out_h, out_w)
+
+    output = Tensor(data)
+    output.add_children((x,))
+
+    def reverse() -> None:
+        # Every position in a window contributed equally, so each gets 1/window of the
+        # output's gradient; col2im adds the overlaps.
+        column_gradient = np.repeat(output.grad.reshape(-1, 1) / window, window, axis=1)
+        x.grad += col2im(
+            column_gradient, merged_shape, kernel_size, stride, padding, out_size
+        ).reshape(x.shape)
+
+    output.forward = "avg_pool2d"
+    output.reverse = reverse
+
     return output

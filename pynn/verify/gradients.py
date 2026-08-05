@@ -31,7 +31,16 @@ from pynn.functional.losses import (
     mean_absolute_error,
     mean_squared_error,
 )
-from pynn.functional.modules import conv2d, flatten, linear
+from pynn.functional.modules import (
+    avg_pool2d,
+    batch_norm,
+    conv2d,
+    dropout,
+    flatten,
+    layer_norm,
+    linear,
+    max_pool2d,
+)
 from pynn.verify.report import CheckReport, CheckResult
 
 __all__ = [
@@ -323,6 +332,63 @@ def _conv2d_case(stride: tuple[int, int], padding: tuple[int, int]) -> ScalarFn:
     return scalar
 
 
+def _layer_norm_case(normalized_shape: tuple[int, ...]) -> ScalarFn:
+    """``sum(layer_norm(x, gamma, beta) * c)`` over one set of trailing axes."""
+
+    def scalar(ts: list[Tensor]) -> Tensor:
+        return pmath.sum(layer_norm(ts[0], ts[1], ts[2], normalized_shape) * ts[3])
+
+    return scalar
+
+
+def _batch_norm_case(features: int | None) -> ScalarFn:
+    """``sum(batch_norm(x, gamma, beta) * c)``, training when `features` is None.
+
+    Evaluation is a genuinely different function: it normalizes by fixed statistics
+    rather than by ones derived from `x`, so its gradient does not go through the mean
+    and the variance at all.
+    """
+
+    def scalar(ts: list[Tensor]) -> Tensor:
+        if features is None:
+            normalized = batch_norm(ts[0], ts[1], ts[2], training=True)
+        else:
+            normalized = batch_norm(
+                ts[0],
+                ts[1],
+                ts[2],
+                running_mean=np.zeros(features),
+                running_var=np.ones(features),
+                training=False,
+            )
+        return pmath.sum(normalized * ts[3])
+
+    return scalar
+
+
+def _pool_case(
+    pool: TensorFn,
+    kernel: tuple[int, int],
+    stride: tuple[int, int] | None,
+    padding: tuple[int, int],
+) -> ScalarFn:
+    """``sum(pool(x) * c)`` for one pooling geometry."""
+
+    def scalar(ts: list[Tensor]) -> Tensor:
+        return pmath.sum(pool(ts[0], kernel, stride, padding) * ts[1])
+
+    return scalar
+
+
+def _pool_reuse_case(pool: TensorFn) -> ScalarFn:
+    """``sum(pool(x)) + sum(x * c)`` — the reuse check for a pooling op."""
+
+    def scalar(ts: list[Tensor]) -> Tensor:
+        return pmath.sum(pool(ts[0])) + pmath.sum(ts[0] * ts[1])
+
+    return scalar
+
+
 def gradient_cases(seed: int = DEFAULT_SEED) -> list[GradientCase]:
     """Build the gradient-check sweep over every operation the library ships with.
 
@@ -601,6 +667,109 @@ def gradient_cases(seed: int = DEFAULT_SEED) -> list[GradientCase]:
             "conv2d with a per-channel bias",
             lambda ts: pmath.sum(conv2d(ts[0], ts[1], ts[2])),
             [normal(2, 2, 4, 4), normal(3, 2, 3, 3), normal(3, 1, 1)],
+        )
+    )
+
+    # Normalization. The statistics depend on every element being normalized, so the
+    # gradient does not factor elementwise: a formulation that forgets either the mean
+    # or the variance path still produces plausible, wrong numbers.
+    for label, shape, normalized in [
+        ("layer_norm (4, 5)", (4, 5), (5,)),
+        ("layer_norm over two axes", (3, 4, 5), (4, 5)),
+    ]:
+        cases.append(
+            (
+                label,
+                _layer_norm_case(normalized),
+                [
+                    normal(*shape),
+                    Tensor(rng.uniform(0.5, 1.5, normalized)),
+                    normal(*normalized),
+                    normal(*shape),
+                ],
+            )
+        )
+    cases += [
+        (
+            "layer_norm without affine parameters",
+            lambda ts: pmath.sum(layer_norm(ts[0]) * ts[1]),
+            [normal(4, 5), normal(4, 5)],
+        ),
+        (
+            "layer_norm with a reused input",
+            lambda ts: pmath.sum(layer_norm(ts[0]) * ts[1]) + pmath.sum(ts[0] * ts[2]),
+            [normal(4, 5), normal(4, 5), normal(4, 5)],
+        ),
+    ]
+
+    for label, shape, statistics in [
+        ("batch_norm (6, 3)", (6, 3), (3,)),
+        ("batch_norm (4, 3, 2, 2)", (4, 3, 2, 2), (3, 1, 1)),
+    ]:
+        inputs = [
+            normal(*shape),
+            Tensor(rng.uniform(0.5, 1.5, statistics)),
+            normal(*statistics),
+            normal(*shape),
+        ]
+        cases.append((f"{label} training", _batch_norm_case(None), inputs))
+        # Evaluation reads fixed statistics, which makes it an affine map of the input
+        # and its gradient a different expression entirely.
+        cases.append(
+            (f"{label} evaluation", _batch_norm_case(statistics[0]), list(inputs))
+        )
+    cases.append(
+        (
+            "batch_norm with a reused input",
+            lambda ts: pmath.sum(batch_norm(ts[0]) * ts[1]) + pmath.sum(ts[0] * ts[2]),
+            [normal(5, 3), normal(5, 3), normal(5, 3)],
+        )
+    )
+
+    # Pooling. Values are drawn far enough apart that a central-difference probe cannot
+    # change which element wins a max window, where the function is not differentiable.
+    def separated(*shape: int) -> Tensor:
+        return Tensor(rng.permutation(int(np.prod(shape))).reshape(shape).astype(float))
+
+    for pool_name, pool in [("max_pool2d", max_pool2d), ("avg_pool2d", avg_pool2d)]:
+        for kernel, step, pad in [
+            ((2, 2), None, (0, 0)),
+            ((2, 2), (1, 1), (0, 0)),
+            ((3, 3), (2, 2), (1, 1)),
+        ]:
+            # The tensor the output is contracted against has to match the pooled
+            # shape, so ask the op itself rather than recomputing the arithmetic.
+            pooled = pool(Tensor(np.zeros((2, 2, 5, 5))), kernel, step, pad).shape
+            cases.append(
+                (
+                    f"{pool_name} kernel={kernel} stride={step} padding={pad}",
+                    _pool_case(pool, kernel, step, pad),
+                    [separated(2, 2, 5, 5), normal(*pooled)],
+                )
+            )
+        cases.append(
+            (
+                f"{pool_name} with a reused input",
+                _pool_reuse_case(pool),
+                [separated(2, 2, 4, 4), normal(2, 2, 4, 4)],
+            )
+        )
+
+    # Dropout's mask is drawn once per call, so the check has to see the same mask on
+    # every probe; a fixed seed is what makes the function deterministic enough to
+    # difference at all.
+    cases.append(
+        (
+            "dropout",
+            lambda ts: pmath.sum(dropout(ts[0], 0.5, training=True, rng=0) * ts[1]),
+            [normal(4, 5), normal(4, 5)],
+        )
+    )
+    cases.append(
+        (
+            "dropout at evaluation",
+            lambda ts: pmath.sum(dropout(ts[0], 0.5, training=False) * ts[1]),
+            [normal(4, 5), normal(4, 5)],
         )
     )
 

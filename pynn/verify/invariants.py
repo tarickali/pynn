@@ -21,7 +21,7 @@ import numpy as np
 import pynn.core.math as pmath
 import pynn.functional as F
 from pynn.core import Tensor, is_grad_enabled, no_grad
-from pynn.nn import Linear, Sequential
+from pynn.nn import BatchNorm1d, Dropout, Linear, Sequential
 from pynn.nn.factories import activation_factory, initializer_factory
 from pynn.nn.losses import MeanSquaredError
 from pynn.optim import SGD, Adadelta, Adagrad, Adam, RMSprop
@@ -546,6 +546,59 @@ def check_modules() -> CheckReport:
     report.add(
         "a state dict round trips",
         bool(np.allclose(source(X).data, target(X).data)),
+    )
+
+    # A layer that ignores the mode gives a different answer on every evaluation call,
+    # and nothing raises.
+    stochastic = Sequential([Linear(4, 6, activation="relu"), Dropout(0.5), Linear(2)])
+    report.add(
+        "dropout varies during training",
+        not np.array_equal(stochastic(X).data, stochastic(X).data),
+    )
+    stochastic.eval()
+    report.add(
+        "dropout is deterministic at evaluation",
+        bool(np.array_equal(stochastic(X).data, stochastic(X).data)),
+    )
+
+    normalized = BatchNorm1d(4)
+    scaled = Tensor(np.random.default_rng(1).standard_normal((32, 4)) * 3.0 + 5.0)
+    for _ in range(200):
+        normalized(scaled)
+    running = normalized.named_buffers()["running_mean"].copy()
+    report.add(
+        "batch norm tracks the running mean",
+        bool(np.allclose(running, scaled.data.mean(axis=0), atol=1e-3)),
+        f"{np.round(running, 3).tolist()}",
+    )
+
+    normalized.eval()
+    single = Tensor(scaled.data[:1])
+    expected = (single.data - running) / np.sqrt(
+        normalized.named_buffers()["running_var"] + 1e-5
+    )
+    report.add(
+        "batch norm uses the running statistics at evaluation",
+        bool(np.allclose(normalized(single).data, expected)),
+    )
+    normalized(Tensor(scaled.data + 100.0))
+    report.add(
+        "batch norm does not update its statistics at evaluation",
+        bool(np.array_equal(normalized.named_buffers()["running_mean"], running)),
+    )
+
+    # Running statistics are buffers, not parameters: never stepped, always saved.
+    report.add(
+        "running statistics are excluded from the optimizer",
+        all(
+            "running" not in name
+            for group in normalized.parameter_groups()
+            for name in group
+        ),
+    )
+    report.add(
+        "running statistics are included in the checkpoint",
+        "running_mean" in normalized.state_dict(),
     )
 
     return report

@@ -1,12 +1,34 @@
 from typing import Any
 
+import numpy as np
+
 from pynn.core import Module, Tensor
 from pynn.core.types import Shape
-from pynn.functional.modules import conv2d, flatten, linear
+from pynn.functional.modules import (
+    avg_pool2d,
+    batch_norm,
+    conv2d,
+    dropout,
+    flatten,
+    layer_norm,
+    linear,
+    max_pool2d,
+)
 from pynn.nn.factories import activation_factory, initializer_factory
 from pynn.utils.array import make_pair
 
-__all__ = ["Activation", "Conv2d", "Flatten", "Linear"]
+__all__ = [
+    "Activation",
+    "AvgPool2d",
+    "BatchNorm1d",
+    "BatchNorm2d",
+    "Conv2d",
+    "Dropout",
+    "Flatten",
+    "LayerNorm",
+    "Linear",
+    "MaxPool2d",
+]
 
 
 class Linear(Module):
@@ -241,3 +263,222 @@ class Activation(Module):
     @property
     def hyperparameters(self) -> dict[str, Any]:
         return {"activation": self.activation}
+
+
+class Dropout(Module):
+    """Randomly zero a fraction of the input during training.
+
+    Active only in training mode: `Module.train()` / `Module.eval()` set the flag this
+    layer reads, which is the canonical reason a model needs those modes at all.
+    Evaluating a model that was left in training mode gives a different answer every
+    call, and nothing raises.
+    """
+
+    def __init__(self, p: float = 0.5, name: str = "Dropout") -> None:
+        super().__init__()
+        if not 0.0 <= p <= 1.0:
+            raise ValueError(f"dropout probability must be in [0, 1], got {p}")
+        self.p = p
+        self.name = name
+
+    def forward(self, X: Tensor) -> Tensor:
+        return dropout(X, self.p, training=self.training)
+
+    @property
+    def hyperparameters(self) -> dict[str, Any]:
+        return {"p": self.p}
+
+
+class LayerNorm(Module):
+    """Normalize each example over its trailing axes, then scale and shift.
+
+    Shape can be given or inferred: `LayerNorm(10)` normalizes over a trailing axis of
+    length 10, and `LayerNorm()` takes the last axis of whatever it first sees.
+    """
+
+    def __init__(
+        self,
+        normalized_shape: int | tuple[int, ...] | None = None,
+        eps: float = 1e-5,
+        elementwise_affine: bool = True,
+        name: str = "LayerNorm",
+    ) -> None:
+        super().__init__()
+        if isinstance(normalized_shape, int):
+            normalized_shape = (normalized_shape,)
+        self.normalized_shape: tuple[int, ...] | None = normalized_shape
+        self.eps = eps
+        self.elementwise_affine = elementwise_affine
+        self.name = name
+
+    def build(self, input_shape: Shape) -> None:
+        if self.normalized_shape is None:
+            self.normalized_shape = (input_shape[-1],)
+        if self.elementwise_affine:
+            self.register_parameter("gamma", np.ones(self.normalized_shape))
+            self.register_parameter("beta", np.zeros(self.normalized_shape))
+        self.initialized = True
+
+    def forward(self, X: Tensor) -> Tensor:
+        if not self.initialized:
+            self.build(X.shape)
+        return layer_norm(
+            X,
+            self.parameters.get("gamma"),
+            self.parameters.get("beta"),
+            self.normalized_shape,
+            self.eps,
+        )
+
+    @property
+    def hyperparameters(self) -> dict[str, Any]:
+        return {
+            "normalized_shape": self.normalized_shape,
+            "eps": self.eps,
+            "elementwise_affine": self.elementwise_affine,
+        }
+
+
+class _BatchNorm(Module):
+    """Shared implementation of BatchNorm1d and BatchNorm2d.
+
+    The two differ only in the rank of the input they accept; the statistics are
+    per-channel either way, taken over every axis except axis 1.
+    """
+
+    #: Accepted input ranks, checked so that feeding (N, C, H, W) to BatchNorm1d fails
+    #: with a shape error rather than normalizing over the wrong axes.
+    ranks: tuple[int, ...] = ()
+
+    def __init__(
+        self,
+        num_features: int | None = None,
+        eps: float = 1e-5,
+        momentum: float = 0.1,
+        affine: bool = True,
+        track_running_stats: bool = True,
+        *,
+        name: str | None = None,
+    ) -> None:
+        super().__init__()
+        self.num_features = num_features
+        self.eps = eps
+        self.momentum = momentum
+        self.affine = affine
+        self.track_running_stats = track_running_stats
+        if name is not None:
+            self.name = name
+
+    def build(self, input_shape: Shape) -> None:
+        if self.num_features is None:
+            self.num_features = input_shape[1]
+        elif input_shape[1] != self.num_features:
+            raise ValueError(
+                f"expected {self.num_features} features, got {input_shape[1]}"
+            )
+
+        # Shaped to broadcast against (batch, channels, ...) along axis 1.
+        shape = (self.num_features, *([1] * (len(input_shape) - 2)))
+        if self.affine:
+            self.register_parameter("gamma", np.ones(shape))
+            self.register_parameter("beta", np.zeros(shape))
+        if self.track_running_stats:
+            self.register_buffer("running_mean", np.zeros(self.num_features))
+            self.register_buffer("running_var", np.ones(self.num_features))
+        self.initialized = True
+
+    def forward(self, X: Tensor) -> Tensor:
+        if self.ranks and X.ndim not in self.ranks:
+            ranks = " or ".join(str(rank) for rank in self.ranks)
+            raise ValueError(
+                f"{self.name} expects an input of rank {ranks}, got shape {X.shape}"
+            )
+        if not self.initialized:
+            self.build(X.shape)
+
+        return batch_norm(
+            X,
+            self.parameters.get("gamma"),
+            self.parameters.get("beta"),
+            self._buffers.get("running_mean"),
+            self._buffers.get("running_var"),
+            training=self.training,
+            momentum=self.momentum,
+            eps=self.eps,
+        )
+
+    @property
+    def hyperparameters(self) -> dict[str, Any]:
+        return {
+            "num_features": self.num_features,
+            "eps": self.eps,
+            "momentum": self.momentum,
+            "affine": self.affine,
+            "track_running_stats": self.track_running_stats,
+        }
+
+
+class BatchNorm1d(_BatchNorm):
+    """Batch normalization for (batch, features) or (batch, features, length) input."""
+
+    ranks = (2, 3)
+
+    def __init__(self, *args: Any, name: str = "BatchNorm1d", **kwargs: Any) -> None:
+        super().__init__(*args, name=name, **kwargs)
+
+
+class BatchNorm2d(_BatchNorm):
+    """Batch normalization for (batch, channels, height, width) input."""
+
+    ranks = (4,)
+
+    def __init__(self, *args: Any, name: str = "BatchNorm2d", **kwargs: Any) -> None:
+        super().__init__(*args, name=name, **kwargs)
+
+
+class _Pool2d(Module):
+    """Shared shape handling for the pooling layers."""
+
+    def __init__(
+        self,
+        kernel_size: int | tuple[int, int] = 2,
+        stride: int | tuple[int, int] | None = None,
+        padding: int | tuple[int, int] = 0,
+        *,
+        name: str | None = None,
+    ) -> None:
+        super().__init__()
+        self.kernel_size = make_pair(kernel_size)
+        # PyTorch's default: non-overlapping windows.
+        self.stride = self.kernel_size if stride is None else make_pair(stride)
+        self.padding = make_pair(padding)
+        if name is not None:
+            self.name = name
+
+    @property
+    def hyperparameters(self) -> dict[str, Any]:
+        return {
+            "kernel_size": self.kernel_size,
+            "stride": self.stride,
+            "padding": self.padding,
+        }
+
+
+class MaxPool2d(_Pool2d):
+    """Take the maximum over each sliding window, per channel."""
+
+    def __init__(self, *args: Any, name: str = "MaxPool2d", **kwargs: Any) -> None:
+        super().__init__(*args, name=name, **kwargs)
+
+    def forward(self, X: Tensor) -> Tensor:
+        return max_pool2d(X, self.kernel_size, self.stride, self.padding)
+
+
+class AvgPool2d(_Pool2d):
+    """Average over each sliding window, per channel."""
+
+    def __init__(self, *args: Any, name: str = "AvgPool2d", **kwargs: Any) -> None:
+        super().__init__(*args, name=name, **kwargs)
+
+    def forward(self, X: Tensor) -> Tensor:
+        return avg_pool2d(X, self.kernel_size, self.stride, self.padding)

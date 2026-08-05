@@ -1,13 +1,14 @@
 """Weight initialization functions.
 
-The random initializers draw from a module-level `numpy.random.Generator` rather than
-the legacy global `numpy.random` functions. Call `set_seed` for reproducible
-initialization, or pass an explicit `rng` to a single initializer.
+The random initializers draw from the generator in `pynn.core.random`, shared with the
+stochastic layers, rather than from the legacy global `numpy.random` functions. Call
+`set_seed` for a reproducible run, or pass an explicit `rng` to a single initializer.
 """
 
 import numpy as np
 
 from pynn.core import Tensor
+from pynn.core.random import default_rng, set_seed
 from pynn.core.types import Number, Shape
 
 __all__ = [
@@ -24,37 +25,6 @@ __all__ = [
     "xavier_uniform",
     "zeros",
 ]
-
-_rng: np.random.Generator = np.random.default_rng()
-
-
-def set_seed(seed: int | None = None) -> None:
-    """Reseed the generator the random initializers draw from.
-
-    Layers build their parameters through the string/factory interface and so cannot be
-    handed a generator directly; this is the hook that makes a whole model's
-    initialization reproducible.
-
-    Parameters
-    ----------
-    seed : int | None
-        Seed value. `None` reseeds from the OS entropy source.
-
-    Examples
-    --------
-    >>> set_seed(0)
-    >>> first = he_normal((4, 3))
-    >>> set_seed(0)
-    >>> bool((first.data == he_normal((4, 3)).data).all())
-    True
-    """
-
-    global _rng
-    _rng = np.random.default_rng(seed)
-
-
-def _generator(rng: np.random.Generator | None) -> np.random.Generator:
-    return _rng if rng is None else rng
 
 
 def zeros(shape: Shape) -> Tensor:
@@ -75,7 +45,7 @@ def random_uniform(
     high: Number = 1.0,
     rng: np.random.Generator | None = None,
 ) -> Tensor:
-    return Tensor(_generator(rng).uniform(low, high, shape))
+    return Tensor(default_rng(rng).uniform(low, high, shape))
 
 
 def random_normal(
@@ -84,34 +54,34 @@ def random_normal(
     std: Number = 1.0,
     rng: np.random.Generator | None = None,
 ) -> Tensor:
-    return Tensor(_generator(rng).normal(mean, std, shape))
+    return Tensor(default_rng(rng).normal(mean, std, shape))
 
 
 def xavier_uniform(shape: Shape, rng: np.random.Generator | None = None) -> Tensor:
     limit = np.sqrt(6.0 / (shape[0] + shape[1]))
-    return Tensor(_generator(rng).uniform(-limit, limit, shape))
+    return Tensor(default_rng(rng).uniform(-limit, limit, shape))
 
 
 def xavier_normal(shape: Shape, rng: np.random.Generator | None = None) -> Tensor:
     std = np.sqrt(2.0 / (shape[0] + shape[1]))
-    return Tensor(_generator(rng).normal(0.0, std, shape))
+    return Tensor(default_rng(rng).normal(0.0, std, shape))
 
 
 def he_uniform(shape: Shape, rng: np.random.Generator | None = None) -> Tensor:
     limit = np.sqrt(6.0 / shape[0])
-    return Tensor(_generator(rng).uniform(-limit, limit, shape))
+    return Tensor(default_rng(rng).uniform(-limit, limit, shape))
 
 
 def he_normal(shape: Shape, rng: np.random.Generator | None = None) -> Tensor:
     std = np.sqrt(2.0 / shape[0])
-    return Tensor(_generator(rng).normal(0.0, std, shape))
+    return Tensor(default_rng(rng).normal(0.0, std, shape))
 
 
 def lecun_uniform(shape: Shape, rng: np.random.Generator | None = None) -> Tensor:
     limit = np.sqrt(3.0 / shape[0])
-    return Tensor(_generator(rng).uniform(-limit, limit, shape))
+    return Tensor(default_rng(rng).uniform(-limit, limit, shape))
 
 
 def lecun_normal(shape: Shape, rng: np.random.Generator | None = None) -> Tensor:
     std = np.sqrt(1.0 / shape[0])
-    return Tensor(_generator(rng).normal(0.0, std, shape))
+    return Tensor(default_rng(rng).normal(0.0, std, shape))

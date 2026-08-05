@@ -48,9 +48,21 @@ def test_sweep_covers_every_operation() -> None:
     a case does not fail the suite, but deleting a block of them does.
     """
     names = {case.name for case in gradient_cases()}
-    assert len(names) >= 130, f"sweep shrank to {len(names)} cases"
+    assert len(names) >= 150, f"sweep shrank to {len(names)} cases"
 
-    for expected in ["add", "matmul", "conv2d", "loss mse", "softmax", "graph diamond"]:
+    for expected in [
+        "add",
+        "matmul",
+        "conv2d",
+        "loss mse",
+        "softmax",
+        "graph diamond",
+        "layer_norm",
+        "batch_norm",
+        "max_pool2d",
+        "avg_pool2d",
+        "dropout",
+    ]:
         assert any(expected in name for name in names), f"no {expected!r} case"
 
     # Every unary and binary op must appear in its reused-input form too; that is the

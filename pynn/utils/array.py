@@ -10,15 +10,22 @@ def make_pair(x: int | tuple[int, int]) -> tuple[int, int]:
     return x
 
 
-def pad_for_conv(x: np.ndarray, pad_h: int, pad_w: int) -> np.ndarray:
-    """Pad spatial dims (last two) of array (batch, ch, h, w)."""
+def pad_for_conv(
+    x: np.ndarray, pad_h: int, pad_w: int, value: float = 0.0
+) -> np.ndarray:
+    """Pad spatial dims (last two) of array (batch, ch, h, w).
+
+    `value` is what the padding is filled with: zero for convolution and average
+    pooling, but negative infinity for max pooling, where a padded position must never
+    be able to win the maximum.
+    """
     if pad_h == 0 and pad_w == 0:
         return x
     return np.pad(
         x,
         ((0, 0), (0, 0), (pad_h, pad_h), (pad_w, pad_w)),
         mode="constant",
-        constant_values=0,
+        constant_values=value,
     )
 
 
