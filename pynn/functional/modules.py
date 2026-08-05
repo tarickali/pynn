@@ -2,7 +2,7 @@ import numpy as np
 
 from pynn.core import Tensor
 from pynn.core.utils import unbroadcast
-from pynn.utils.array import pad_for_conv
+from pynn.utils.array import col2im, im2col, pad_for_conv
 
 __all__ = ["conv2d", "flatten", "linear"]
 
@@ -35,86 +35,81 @@ def conv2d(
     stride: tuple[int, int] = (1, 1),
     padding: tuple[int, int] = (0, 0),
 ) -> Tensor:
-    """2D convolution with stride and padding.
+    """2D convolution via im2col and a single matrix multiply.
 
-    Parameters:
-    -----------
+    Sliding-window convolution is equivalent to unrolling every input patch into a
+    column of a matrix and multiplying by the reshaped kernel. That replaces a Python
+    loop over output positions with one BLAS gemm, which is the difference between a
+    toy convolution and one that trains a small CNN in reasonable time.
+
+    Parameters
+    ----------
     X : Tensor
-        Input tensor of shape (batch, in_ch, in_h, in_w).
+        Input of shape ``(batch, in_ch, in_h, in_w)``.
     K : Tensor
-        Kernel tensor of shape (out_ch, in_ch, kh, kw).
+        Kernel of shape ``(out_ch, in_ch, kh, kw)``.
     B : Tensor | None
-        Bias tensor of shape (out_ch, 1, 1), or any shape that broadcasts against
-        (out_ch, out_h, out_w). One bias per output channel, shared across spatial
+        Bias of shape ``(out_ch, 1, 1)``, or any shape that broadcasts against
+        ``(out_ch, out_h, out_w)``. One bias per output channel, shared across spatial
         positions, is what makes the layer translation-equivariant; a bias per output
         position would also tie the parameter count to the input resolution.
     stride : tuple[int, int]
-        Stride for the convolution.
+        ``(stride_h, stride_w)``.
     padding : tuple[int, int]
-        Padding for the convolution.
+        Zero-padding added to each side of the spatial axes.
 
-    Returns:
-    --------
+    Returns
+    -------
     Tensor
-        Output tensor of shape (batch, out_ch, out_h, out_w).
+        Output of shape ``(batch, out_ch, out_h, out_w)``.
     """
     batch_size = X.shape[0]
     out_ch, _, kh, kw = K.shape
-    _, in_h, in_w = X.shape[1:]
     sh, sw = stride
     ph, pw = padding
 
-    # Pad input
     X_arr = X.data
-    X_pad = pad_for_conv(X_arr, ph, pad_w=pw)
+    K_arr = K.data
+    X_pad = pad_for_conv(X_arr, ph, pw)
     _, _, padded_h, padded_w = X_pad.shape
 
     out_h = (padded_h - kh) // sh + 1
     out_w = (padded_w - kw) // sw + 1
-    output_shape = (out_ch, out_h, out_w)
+    out_size = (out_h, out_w)
+    kernel_size = (kh, kw)
+    # Concrete 4-D shape for col2im; `X.shape` is typed as a variable-length Shape.
+    input_shape = (batch_size, X.shape[1], X.shape[2], X.shape[3])
 
-    data = np.zeros((batch_size, *output_shape), dtype=X_arr.dtype)
-    K_arr = K.data
-
-    for oh in range(out_h):
-        for ow in range(out_w):
-            h_start, w_start = oh * sh, ow * sw
-            patch = X_pad[:, :, h_start : h_start + kh, w_start : w_start + kw]
-            # patch (batch, in_ch, kh, kw), K (out_ch, in_ch, kh, kw) -> (batch, out_ch)
-            data[:, :, oh, ow] = np.einsum("bijk,oijk->bo", patch, K_arr)
+    # (N*oh*ow, in_ch*kh*kw) @ (in_ch*kh*kw, out_ch) -> (N*oh*ow, out_ch)
+    cols = im2col(X_pad, kernel_size, stride, out_size)
+    K_mat = K_arr.reshape(out_ch, -1)
+    out_mat = cols @ K_mat.T
+    data = out_mat.reshape(batch_size, out_h, out_w, out_ch).transpose(0, 3, 1, 2)
 
     if B is not None:
-        data += B.data
+        data = data + B.data
 
     output = Tensor(data)
     output.add_children((X, K) if B is None else (X, K, B))
 
     def reverse():
-        O_grad = output.grad
-        K_grad = np.zeros(K.shape, dtype=K_arr.dtype)
-        X_pad_grad = np.zeros_like(X_pad)
+        # Undo the forward reshape so the chain rule is a pair of matrix products.
+        O_mat = output.grad.transpose(0, 2, 3, 1).reshape(
+            batch_size * out_h * out_w, out_ch
+        )
 
-        for oh in range(out_h):
-            for ow in range(out_w):
-                h_start, w_start = oh * sh, ow * sw
-                # d(out[b,o,oh,ow])/d(patch) = K[o]; d/dK = patch * out_grad
-                patch = X_pad[:, :, h_start : h_start + kh, w_start : w_start + kw]
-                # O_grad (batch, out_ch) -> broadcast to (batch, out_ch, in_ch, kh, kw)
-                X_pad_grad[:, :, h_start : h_start + kh, w_start : w_start + kw] += (
-                    np.einsum("bo,oijk->bijk", O_grad[:, :, oh, ow], K_arr)
-                )
-                K_grad += np.einsum("bo,bijk->oijk", O_grad[:, :, oh, ow], patch)
-
-        # Unpad gradient back to input shape
-        if ph == 0 and pw == 0:
-            X.grad += X_pad_grad
-        else:
-            X.grad += X_pad_grad[:, :, ph : ph + in_h, pw : pw + in_w]
-
-        K.grad += K_grad
+        K.grad += (O_mat.T @ cols).reshape(K.shape)
+        X.grad += col2im(
+            O_mat @ K_mat,
+            input_shape,
+            kernel_size,
+            stride,
+            padding,
+            out_size,
+        )
         if B is not None:
             # Sums over batch, and over the spatial axes the bias was broadcast along.
-            B.grad += unbroadcast(O_grad, B.shape)
+            B.grad += unbroadcast(output.grad, B.shape)
 
     output.reverse = reverse
     output.forward = "conv2d"
