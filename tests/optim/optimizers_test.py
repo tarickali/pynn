@@ -269,3 +269,85 @@ def test_optimizer_handles_lazily_built_parameters(optimizer_cls):
     optimizer.update()
 
     assert not np.allclose(before, model.modules[0].parameters["W"].data)
+
+
+# --------------------------------------------------------------------------- #
+# Frozen parameters
+#
+# A frozen parameter still receives a gradient from backward(); it is the optimizer
+# that has to leave it alone. "Loss went down" cannot catch a leak here, because a
+# model that trains the layer it was told to freeze trains perfectly well.
+# --------------------------------------------------------------------------- #
+
+
+def _trained_pair(optimizer_cls, freeze_first: bool, freeze_before_build: bool):
+    """Train a two-layer model with the first layer optionally frozen."""
+    rng = np.random.default_rng(5)
+    X = Tensor(rng.standard_normal((8, 4)))
+    y = Tensor(rng.standard_normal((8, 2)))
+
+    model = Sequential([Linear(4, 3, activation="tanh"), Linear(3, 2)])
+    if freeze_first and freeze_before_build:
+        model.modules[0].freeze()
+    if not freeze_before_build:
+        model(X)  # force the lazy build so the parameters exist first
+        if freeze_first:
+            model.modules[0].freeze()
+
+    optimizer = optimizer_cls(model.parameters, learning_rate=0.1)
+    loss_fn = MeanSquaredError()
+
+    model(X)  # ensure built before snapshotting
+    before = {
+        index: {name: p.data.copy() for name, p in module.parameters.items()}
+        for index, module in enumerate(model.modules)
+    }
+
+    for _ in range(3):
+        loss = loss_fn(y, model(X))
+        model.zero_grad()
+        loss.backward()
+        optimizer.update()
+
+    return model, before
+
+
+@pytest.mark.parametrize("optimizer_cls", ALL_OPTIMIZERS, ids=lambda c: c.__name__)
+@pytest.mark.parametrize(
+    "freeze_before_build", [True, False], ids=["prebuild", "built"]
+)
+def test_frozen_parameters_are_not_updated(optimizer_cls, freeze_before_build):
+    model, before = _trained_pair(
+        optimizer_cls, freeze_first=True, freeze_before_build=freeze_before_build
+    )
+
+    for name, param in model.modules[0].parameters.items():
+        assert np.array_equal(param.data, before[0][name]), (
+            f"frozen parameter {name!r} was updated"
+        )
+        # The gradient must still have been computed; freezing is not detaching.
+        assert np.any(param.grad != 0.0), f"frozen parameter {name!r} got no gradient"
+
+    for name, param in model.modules[1].parameters.items():
+        assert not np.array_equal(param.data, before[1][name]), (
+            f"trainable parameter {name!r} was skipped"
+        )
+
+
+@pytest.mark.parametrize("optimizer_cls", ALL_OPTIMIZERS, ids=lambda c: c.__name__)
+def test_unfreeze_restores_updates(optimizer_cls):
+    param = Tensor(np.array([START]))
+    module = Linear(2, 1)
+    module.parameters["w"] = param
+
+    optimizer = optimizer_cls([module.parameters], learning_rate=0.1)
+
+    module.freeze()
+    param.grad = np.array([GRADIENT])
+    optimizer.update()
+    assert param.data.tolist() == [START]
+
+    module.unfreeze()
+    param.grad = np.array([GRADIENT])
+    optimizer.update()
+    assert param.data.tolist() != [START]

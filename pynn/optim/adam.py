@@ -38,7 +38,7 @@ class Adam(Optimizer):
 
     def update(self) -> None:
         t = self.time + 1
-        for params, cache in zip(self.parameters, self.cache, strict=True):
+        for params, cache in zip(self.trainable_parameters(), self.cache, strict=True):
             for key, param in params.items():
                 data, grad = get_data_and_grad(param)
                 g = -grad if self.maximize else grad

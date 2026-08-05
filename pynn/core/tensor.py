@@ -283,34 +283,60 @@ class Tensor:
     # what the `override` and `misc` ignores below are for: mypy is right that this is
     # a Liskov violation, and every array library makes the same trade.
     #
-    # The consequence is that `if a == b:` does not mean what it looks like. Use
-    # `bool((a == b).data.all())` for an all-elements-equal test. Note that identity
-    # semantics are preserved separately by `__hash__`, which the backward pass relies
-    # on to put Tensors in a visited set.
+    # `if a == b:` therefore cannot mean what it looks like. `__bool__` raises for any
+    # Tensor that is not a single element, so that form fails loudly rather than
+    # silently returning True for every non-empty Tensor. Use `(a == b).all()` for an
+    # all-elements-equal test. Identity semantics are preserved separately by
+    # `__hash__`, which the backward pass relies on to put Tensors in a visited set.
     # ------------------------------------------------------------------------ #
     def __eq__(self, other: Tensor | TensorLike) -> Tensor:  # type: ignore[override]
         other = convert_tensor_input(other)
-        return Tensor(data=equal(self.data, other.data))
+        return Tensor(data=equal(self.data, other.data), dtype=bool)
 
     def __ne__(self, other: Tensor | TensorLike) -> Tensor:  # type: ignore[override]
         other = convert_tensor_input(other)
-        return Tensor(data=not_equal(self.data, other.data))
+        return Tensor(data=not_equal(self.data, other.data), dtype=bool)
 
     def __ge__(self, other: Tensor | TensorLike) -> Tensor:  # type: ignore[misc]
         other = convert_tensor_input(other)
-        return Tensor(data=greater_than_equal(self.data, other.data))
+        return Tensor(data=greater_than_equal(self.data, other.data), dtype=bool)
 
     def __gt__(self, other: Tensor | TensorLike) -> Tensor:  # type: ignore[misc]
         other = convert_tensor_input(other)
-        return Tensor(data=greater_than(self.data, other.data))
+        return Tensor(data=greater_than(self.data, other.data), dtype=bool)
 
     def __le__(self, other: Tensor | TensorLike) -> Tensor:  # type: ignore[misc]
         other = convert_tensor_input(other)
-        return Tensor(data=less_than_equal(self.data, other.data))
+        return Tensor(data=less_than_equal(self.data, other.data), dtype=bool)
 
     def __lt__(self, other: Tensor | TensorLike) -> Tensor:  # type: ignore[misc]
         other = convert_tensor_input(other)
-        return Tensor(data=less_than(self.data, other.data))
+        return Tensor(data=less_than(self.data, other.data), dtype=bool)
+
+    def __bool__(self) -> bool:
+        """Truth value of a single-element Tensor.
+
+        Raises
+        ------
+        ValueError
+            If this Tensor holds more than one element. Element-wise comparisons return
+            a Tensor of booleans, so `if a == b:` would otherwise be True for every
+            non-empty Tensor under Python's default object truthiness.
+        """
+        if self.size != 1:
+            raise ValueError(
+                "the truth value of a Tensor with more than one element is ambiguous. "
+                "Use .any() or .all() to reduce it to a single boolean."
+            )
+        return bool(self.data)
+
+    def all(self) -> bool:
+        """True if every element is truthy."""
+        return bool(self.data.all())
+
+    def any(self) -> bool:
+        """True if any element is truthy."""
+        return bool(self.data.any())
 
     def __hash__(self) -> int:
         return id(self)

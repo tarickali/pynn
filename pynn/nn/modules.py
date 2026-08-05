@@ -58,14 +58,14 @@ class Linear(Module):
                 f"Expected in_features {self.in_features}, got {input_shape[1]}"
             )
 
-        self.parameters["W"] = Tensor(
-            self.weight_init((self.in_features, self.out_features))
+        W = self.register_parameter(
+            "W", self.weight_init((self.in_features, self.out_features))
         )
-        assert self.parameters["W"].shape == (self.in_features, self.out_features)
+        assert W.shape == (self.in_features, self.out_features)
 
         if self.include_bias:
-            self.parameters["b"] = Tensor(self.bias_init((self.out_features,)))
-            assert self.parameters["b"].shape == (self.out_features,)
+            b = self.register_parameter("b", self.bias_init((self.out_features,)))
+            assert b.shape == (self.out_features,)
 
         self.initialized = True
 
@@ -173,13 +173,16 @@ class Conv2d(Module):
         self.input_shape = (in_ch, in_h, in_w)
         self.output_shape = (self.out_channels, out_h, out_w)
         self.kernel_shape = (self.out_channels, self.in_channels, kh, kw)
+        # One bias per output channel, broadcast across every spatial position. The
+        # trailing 1s make it broadcast against (batch, out_ch, out_h, out_w) directly.
+        self.bias_shape: Shape = (self.out_channels, 1, 1)
 
-        self.parameters["K"] = Tensor(self.kernel_init(self.kernel_shape))
-        assert self.parameters["K"].shape == self.kernel_shape
+        K = self.register_parameter("K", self.kernel_init(self.kernel_shape))
+        assert K.shape == self.kernel_shape
 
         if self.include_bias:
-            self.parameters["B"] = Tensor(self.bias_init(self.output_shape))
-            assert self.parameters["B"].shape == self.output_shape
+            B = self.register_parameter("B", self.bias_init(self.bias_shape))
+            assert B.shape == self.bias_shape
 
         self.initialized = True
 

@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from pynn.core import Tensor
 from pynn.core.types import Array
@@ -189,35 +190,45 @@ def test_comparison_operations(rng):
     x = Tensor(a)
     y = Tensor(b)
 
-    c = a == b
-    z = x == y
-    assert isinstance(z, Tensor)
-    assert np.all(z.data == c)
+    for op in [
+        lambda u, v: u == v,
+        lambda u, v: u != v,
+        lambda u, v: u <= v,
+        lambda u, v: u < v,
+        lambda u, v: u >= v,
+        lambda u, v: u > v,
+    ]:
+        expected = op(a, b)
+        result = op(x, y)
+        assert isinstance(result, Tensor)
+        assert result.dtype == bool
+        assert np.array_equal(result.data, expected)
 
-    c = a != b
-    z = x != y
-    assert isinstance(z, Tensor)
-    assert np.all(z.data == c)
 
-    c = a <= b
-    z = x <= y
-    assert isinstance(z, Tensor)
-    assert np.all(z.data == c)
+def test_bool_rejects_a_multi_element_tensor():
+    """`if a == b:` must not silently return True for every non-empty Tensor."""
+    equal = Tensor([1.0, 2.0]) == Tensor([1.0, 2.0])
+    unequal = Tensor([1.0, 2.0]) == Tensor([1.0, 3.0])
 
-    c = a < b
-    z = x < y
-    assert isinstance(z, Tensor)
-    assert np.all(z.data == c)
+    assert equal.dtype == bool
+    assert equal.all()
+    assert not unequal.all()
+    assert unequal.any()
 
-    c = a >= b
-    z = x >= y
-    assert isinstance(z, Tensor)
-    assert np.all(z.data == c)
+    with pytest.raises(ValueError, match="ambiguous"):
+        bool(equal)
+    with pytest.raises(ValueError, match="ambiguous"):
+        bool(unequal)
+    with pytest.raises(ValueError, match="ambiguous"):
+        if equal:
+            pass
 
-    c = a > b
-    z = x > y
-    assert isinstance(z, Tensor)
-    assert np.all(z.data == c)
+
+def test_bool_of_a_scalar_tensor():
+    assert bool(Tensor(1.0)) is True
+    assert bool(Tensor(0.0)) is False
+    assert bool(Tensor([True], dtype=bool)) is True
+    assert bool(Tensor([False], dtype=bool)) is False
 
 
 def test_cast():

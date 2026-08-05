@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 from pynn.core.tensor import Tensor
-from pynn.core.types import Shape
+from pynn.core.types import Array, Shape
 
 __all__ = ["Module"]
 
@@ -33,22 +33,42 @@ class Module(ABC):
         """Build the Module parameters based on the given input shape."""
         return
 
+    def register_parameter(self, name: str, value: Array | Tensor) -> Tensor:
+        """Register a parameter under `name` and return it.
+
+        `build` implementations should use this rather than assigning into
+        `self.parameters` directly, so that a parameter created by a lazy build inherits
+        the Module's frozen state. A Module frozen before its first forward pass has no
+        parameters to mark yet, and would otherwise come back trainable once built.
+        """
+        tensor = value if isinstance(value, Tensor) else Tensor(value)
+        tensor.trainable = self.trainable
+        self.parameters[name] = tensor
+        return tensor
+
     def zero_grad(self) -> None:
         """Clear the gradients for each parameter in the Module."""
         for param in self.parameters:
             self.parameters[param].zero_grad()
 
     def freeze(self) -> None:
-        """Set the Module to be untrainable."""
-        for param in self.parameters:
-            self.parameters[param].trainable = False
-        self.trainable = False
+        """Exclude this Module's parameters from optimizer updates.
+
+        Frozen parameters still receive gradients during the backward pass; it is the
+        optimizer that skips them, via `Optimizer.trainable_parameters`.
+        """
+        self._set_trainable(False)
 
     def unfreeze(self) -> None:
-        """Set the Module to be trainable."""
-        for param in self.parameters:
-            self.parameters[param].trainable = True
-        self.trainable = True
+        """Return this Module's parameters to being updated by the optimizer."""
+        self._set_trainable(True)
+
+    def _set_trainable(self, trainable: bool) -> None:
+        # Recorded on the Module as well as the parameters, so that a build triggered
+        # after this point can propagate it to the parameters it creates.
+        self.trainable = trainable
+        for param in self.parameters.values():
+            param.trainable = trainable
 
     def summary(self) -> dict[str, Any]:
         """Get a summary of the Module.

@@ -1,6 +1,7 @@
 import numpy as np
 
 from pynn.core import Tensor
+from pynn.core.utils import unbroadcast
 from pynn.utils.array import pad_for_conv
 
 __all__ = ["conv2d", "flatten", "linear"]
@@ -43,7 +44,10 @@ def conv2d(
     K : Tensor
         Kernel tensor of shape (out_ch, in_ch, kh, kw).
     B : Tensor | None
-        Bias tensor of shape (out_ch, out_h, out_w).
+        Bias tensor of shape (out_ch, 1, 1), or any shape that broadcasts against
+        (out_ch, out_h, out_w). One bias per output channel, shared across spatial
+        positions, is what makes the layer translation-equivariant; a bias per output
+        position would also tie the parameter count to the input resolution.
     stride : tuple[int, int]
         Stride for the convolution.
     padding : tuple[int, int]
@@ -109,8 +113,8 @@ def conv2d(
 
         K.grad += K_grad
         if B is not None:
-            # B has shape (out_ch, out_h, out_w); gradient is sum over batch
-            B.grad += np.sum(O_grad, axis=0)
+            # Sums over batch, and over the spatial axes the bias was broadcast along.
+            B.grad += unbroadcast(O_grad, B.shape)
 
     output.reverse = reverse
     output.forward = "conv2d"

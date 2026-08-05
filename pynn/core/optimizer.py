@@ -20,6 +20,22 @@ class Optimizer(ABC):
     def reset(self) -> None:
         self.time = 0
 
+    def trainable_parameters(self) -> list[dict[str, Tensor]]:
+        """The parameter groups with frozen parameters removed.
+
+        `update` implementations must iterate this rather than `self.parameters`, or
+        `Module.freeze()` has no effect: a frozen parameter still receives a gradient
+        during the backward pass, so an optimizer reading `self.parameters` directly
+        will happily step it.
+
+        One group is returned per group in `self.parameters`, empty groups included, so
+        that the result stays index-aligned with per-group optimizer state.
+        """
+        return [
+            {name: p for name, p in group.items() if p.trainable}
+            for group in self.parameters
+        ]
+
     @abstractmethod
     def update(self) -> None:
         raise NotImplementedError
