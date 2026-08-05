@@ -43,7 +43,17 @@ jobs:
       - name: Pytest
         # The optional torch/tensorflow comparison tests skip themselves when those
         # packages are absent; exclude them explicitly so CI stays NumPy-only.
-        run: pytest -m "not external"
+        # --cov opts into the fail_under threshold configured in pyproject.toml.
+        run: pytest -m "not external" --cov=pynn --cov-report=xml --cov-report=term-missing
 
       - name: Verify
         run: python -m pynn.verify
+
+      - name: Upload coverage
+        # One version only: every job produces the same report, and uploading all four
+        # just makes Codecov wait for reports it does not need.
+        if: matrix.python-version == '3.12'
+        uses: codecov/codecov-action@v5
+        with:
+          files: coverage.xml
+          fail_ci_if_error: false

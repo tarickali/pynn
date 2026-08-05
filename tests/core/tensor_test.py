@@ -237,3 +237,94 @@ def test_cast():
     assert x.dtype == int
     x.cast(np.float32)
     assert x.dtype == np.float32
+
+
+# --------------------------------------------------------------------------- #
+# Reflected operators
+#
+# `2.0 - x` reaches `__rsub__`, which is a different code path from `x - 2.0` and
+# gets the operand order wrong if it just delegates to `__sub__`.
+# --------------------------------------------------------------------------- #
+
+
+def test_reflected_operators_use_the_right_operand_order(rng):
+    a = rng.standard_normal((2, 3))
+    x = Tensor(a)
+
+    assert np.allclose((2.0 + x).data, 2.0 + a)
+    assert np.allclose((2.0 - x).data, 2.0 - a)
+    assert np.allclose((2.0 * x).data, 2.0 * a)
+    assert np.allclose((2.0 / x).data, 2.0 / a)
+
+
+def test_reflected_matmul_uses_the_right_operand_order(rng):
+    a = rng.standard_normal((2, 3))
+    b = rng.standard_normal((3, 4))
+
+    assert np.allclose((a @ Tensor(b)).data, a @ b)
+
+
+def test_an_ndarray_on_the_left_still_produces_a_tensor(rng):
+    """NumPy used to win the dispatch and return an object-dtype array of Tensors.
+
+    That is silently wrong: the result looks like an array, has no gradient, and
+    every subsequent operation on it is Python-level object arithmetic.
+    """
+    a = rng.standard_normal((2, 3))
+    x = Tensor(rng.standard_normal((2, 3)))
+
+    for result in [a + x, a - x, a * x, a / x]:
+        assert isinstance(result, Tensor)
+        assert result.dtype == np.float64
+
+
+def test_an_ndarray_on_the_left_stays_on_the_tape(rng):
+    import pynn.core.math as pmath
+
+    x = Tensor(rng.standard_normal((2, 3)))
+    pmath.sum(np.full((2, 3), 3.0) * x).backward()
+
+    assert np.allclose(x.grad, 3.0)
+
+
+# --------------------------------------------------------------------------- #
+# Accessors and rejection paths
+# --------------------------------------------------------------------------- #
+
+
+def test_numpy_returns_the_underlying_array(rng):
+    a = rng.standard_normal((2, 3))
+    tensor = Tensor(a)
+
+    assert isinstance(tensor.numpy(), Array)
+    assert np.allclose(tensor.numpy(), a)
+
+
+def test_item_returns_a_python_scalar():
+    assert Tensor([[2.5]]).item() == 2.5
+
+
+def test_shape_properties():
+    tensor = Tensor(np.zeros((2, 3, 4)))
+
+    assert tensor.shape == (2, 3, 4)
+    assert tensor.ndim == 3
+    assert tensor.size == 24
+
+
+def test_repr_names_the_dtype_and_shape():
+    text = repr(Tensor(np.zeros((2, 3))))
+
+    assert text.startswith("Tensor(")
+    assert "float64" in text
+    assert "(2, 3)" in text
+
+
+def test_pow_rejects_a_tensor_exponent():
+    with pytest.raises(TypeError, match="Cannot perform operation"):
+        Tensor([1.0, 2.0]) ** Tensor([2.0, 2.0])
+
+
+def test_operations_reject_an_unconvertible_operand():
+    with pytest.raises(TypeError, match="Cannot perform operation"):
+        Tensor([1.0]) + "two"

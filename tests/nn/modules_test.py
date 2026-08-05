@@ -179,3 +179,62 @@ def test_activation_layer_has_no_parameters():
     layer = Activation("relu")
     layer(Tensor(np.zeros((2, 3))))
     assert layer.parameters == {}
+
+
+# --------------------------------------------------------------------------- #
+# Hyperparameters
+#
+# `hyperparameters` is what `summary()` renders and what a future `state_dict` would
+# need to rebuild a layer, so it has to report what the layer was actually
+# constructed with rather than a hard-coded default.
+# --------------------------------------------------------------------------- #
+
+
+def test_linear_reports_its_hyperparameters():
+    layer = Linear(4, 3, activation="relu", include_bias=False)
+
+    assert layer.hyperparameters == {
+        "in_features": 4,
+        "out_features": 3,
+        "activation": "relu",
+        "weight_initializer": "xavier_normal",
+        "bias_initializer": "zeros",
+        "include_bias": False,
+    }
+
+
+def test_linear_hyperparameters_pick_up_an_inferred_in_features():
+    layer = Linear(3)
+    assert layer.hyperparameters["in_features"] is None
+
+    layer(Tensor(np.zeros((2, 6))))
+    assert layer.hyperparameters["in_features"] == 6
+
+
+def test_conv2d_reports_its_hyperparameters():
+    layer = Conv2d(in_channels=2, out_channels=3, kernel_size=3, stride=2, padding=1)
+    hyperparameters = layer.hyperparameters
+
+    assert hyperparameters["in_channels"] == 2
+    assert hyperparameters["out_channels"] == 3
+    assert hyperparameters["kernel_size"] == (3, 3)
+    assert hyperparameters["stride"] == (2, 2)
+    # The original spec, not the resolved (int, int), so 'same' survives a round trip.
+    assert hyperparameters["padding"] == 1
+    assert hyperparameters["input_shape"] is None
+
+    layer(Tensor(np.zeros((1, 2, 8, 8))))
+    assert layer.hyperparameters["input_shape"] == (2, 8, 8)
+
+
+def test_flatten_and_activation_report_their_hyperparameters():
+    assert Flatten().hyperparameters == {}
+    assert Activation("tanh").hyperparameters == {"activation": "tanh"}
+
+
+def test_summary_names_the_layer_and_its_hyperparameters():
+    layer = Linear(4, 3, name="encoder")
+    summary = layer.summary()
+
+    assert summary["name"] == "encoder"
+    assert summary["hyperparameters"]["out_features"] == 3

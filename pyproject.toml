@@ -94,3 +94,19 @@ markers = [
     "external: requires an optional third-party framework (torch, tensorflow)",
     "slow: takes more than a second or two to run",
 ]
+
+[tool.coverage.run]
+source = ["pynn"]
+
+[tool.coverage.report]
+# The threshold lives here rather than in pytest's addopts so that running a single
+# test file does not fail for covering only one module. Any run that opts into
+# measurement — `pytest --cov=pynn`, which is what CI does — is held to it.
+fail_under = 95
+show_missing = true
+exclude_also = [
+    # Abstract method bodies. Reaching them means a subclass failed to override, which
+    # is what the ABC already prevents.
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]

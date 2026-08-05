@@ -162,6 +162,21 @@ def test_rmsprop_momentum():
     assert trajectory == pytest.approx(expected)
 
 
+def test_rmsprop_centered():
+    """Centering subtracts the squared running mean, estimating variance not power."""
+    lr, alpha, eps = 0.01, 0.99, 1e-10
+    expected, value, square_average, average = [], START, 0.0, 0.0
+    for _ in range(STEPS):
+        square_average = alpha * square_average + (1 - alpha) * GRADIENT**2
+        average = alpha * average + (1 - alpha) * GRADIENT
+        value -= lr * GRADIENT / (np.sqrt(square_average - average**2) + eps)
+        expected.append(value)
+
+    trajectory = run_optimizer(RMSprop, learning_rate=lr, centered=True)
+    assert trajectory == pytest.approx(expected)
+    assert trajectory != pytest.approx(run_optimizer(RMSprop, learning_rate=lr))
+
+
 def test_rmsprop_maximize_ascends():
     """maximize was accepted but silently ignored; this pins the behavior down."""
     trajectory = run_optimizer(RMSprop, learning_rate=0.01, maximize=True)

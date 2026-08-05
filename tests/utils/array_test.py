@@ -3,7 +3,18 @@
 import numpy as np
 import pytest
 
-from pynn.utils.array import col2im, im2col, pad_for_conv
+from pynn.utils.array import col2im, im2col, make_pair, pad_for_conv
+
+
+def test_make_pair_broadcasts_an_int_and_passes_a_pair_through():
+    assert make_pair(3) == (3, 3)
+    assert make_pair((2, 5)) == (2, 5)
+
+
+def test_pad_for_conv_returns_the_input_when_there_is_no_padding():
+    x = np.zeros((1, 1, 3, 3))
+    assert pad_for_conv(x, 0, 0) is x
+    assert pad_for_conv(x, 1, 2).shape == (1, 1, 5, 7)
 
 
 def _naive_im2col(x, kernel_size, stride, out_size):

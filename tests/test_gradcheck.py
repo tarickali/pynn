@@ -16,12 +16,19 @@ rather than against central differences, and a whole model's parameters at once.
 import numpy as np
 import pytest
 
+import pynn.core.math as pmath
 import pynn.functional as F
 from pynn.core import Tensor
 from pynn.functional.losses import binary_crossentropy, categorical_crossentropy
 from pynn.nn import Linear, Sequential
 from pynn.nn.losses import MeanSquaredError
-from pynn.verify import GradientCase, check_gradients, gradient_cases
+from pynn.verify import (
+    GradCheckResult,
+    GradientCase,
+    check_case,
+    check_gradients,
+    gradient_cases,
+)
 
 # --------------------------------------------------------------------------- #
 # The shipped sweep, one pytest case per operation
@@ -132,3 +139,95 @@ def test_mlp_parameter_gradients(activation: str) -> None:
 
     result = check_gradients(fn, parameters)
     assert result.passed, f"\n{result}"
+
+
+# --------------------------------------------------------------------------- #
+# The checker itself
+#
+# Every assertion above is worthless if `check_gradients` cannot fail. These build
+# operations with deliberately wrong reverse passes — the same shapes the library's
+# own bugs took — and assert the checker catches them and says where.
+# --------------------------------------------------------------------------- #
+
+
+def dropped_gradient(ts: list[Tensor]) -> Tensor:
+    """`2 * x`, with a reverse pass that propagates nothing."""
+    x = ts[0]
+    output = Tensor(x.data * 2.0)
+    output.add_children((x,))
+    output.reverse = lambda: None
+    return pmath.sum(output)
+
+
+def test_a_missing_gradient_is_reported_as_a_failure() -> None:
+    result = check_gradients(dropped_gradient, [Tensor(np.ones((2, 3)))])
+
+    assert not result.passed
+    assert result.max_relative_error == pytest.approx(1.0)
+
+
+def test_a_failure_names_the_worst_element() -> None:
+    result = check_gradients(dropped_gradient, [Tensor(np.ones((2, 3)))])
+    text = str(result)
+
+    assert "FAILED" in text
+    assert "worst at" in text
+    assert "numerical=+2.00000000" in text
+    assert result.inputs[0].worst_index() == (0, 0)
+
+
+def test_a_passing_check_renders_without_a_worst_element() -> None:
+    result = check_gradients(lambda ts: pmath.sum(ts[0] * 2.0), [Tensor(np.ones(3))])
+
+    assert "PASSED" in str(result)
+    assert "worst at" not in str(result)
+
+
+def test_an_empty_result_has_no_error() -> None:
+    assert GradCheckResult().max_relative_error == 0.0
+    assert GradCheckResult().passed
+
+
+def test_a_non_scalar_function_is_rejected() -> None:
+    with pytest.raises(ValueError, match="scalar-valued"):
+        check_gradients(lambda ts: ts[0] * 2.0, [Tensor(np.ones((2, 2)))])
+
+
+def test_a_wrongly_shaped_gradient_is_rejected() -> None:
+    """A reverse pass that writes the wrong shape must not be silently broadcast."""
+
+    def misshapen(ts: list[Tensor]) -> Tensor:
+        x = ts[0]
+        output = Tensor(np.sum(x.data))
+        output.add_children((x,))
+
+        def reverse() -> None:
+            x.grad = np.zeros((1,))
+
+        output.reverse = reverse
+        return output
+
+    with pytest.raises(ValueError, match="autodiff produced a gradient of shape"):
+        check_gradients(misshapen, [Tensor(np.ones((2, 2)))])
+
+
+def test_check_case_reports_a_raised_exception_as_a_failure() -> None:
+    """One broken op must not abort the rest of the `python -m pynn.verify` sweep."""
+
+    def explodes(_: list[Tensor]) -> Tensor:
+        raise RuntimeError("boom")
+
+    result = check_case(GradientCase("explodes", explodes, [Tensor(np.ones(2))]))
+
+    assert not result.passed
+    assert "raised RuntimeError: boom" in result.detail
+
+
+def test_check_case_reports_a_passing_case() -> None:
+    case = GradientCase(
+        "double", lambda ts: pmath.sum(ts[0] * 2.0), [Tensor(np.ones(3))]
+    )
+    result = check_case(case)
+
+    assert result.passed
+    assert result.name == "double"

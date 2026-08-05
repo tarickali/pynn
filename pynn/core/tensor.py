@@ -28,6 +28,13 @@ TensorLike = ArrayLike
 
 
 class Tensor:
+    #: Decline to participate in NumPy's ufunc dispatch. Without this, NumPy handles
+    #: `array + tensor` itself by coercing the Tensor to a 0-d object array, so the
+    #: result is an object-dtype array of Tensors and `__radd__` is never called —
+    #: silently wrong rather than an error. Setting this to None makes NumPy return
+    #: NotImplemented, which is what sends Python to the reflected method (NEP 13).
+    __array_ufunc__ = None
+
     def __init__(self, data: Tensor | TensorLike, dtype: DataType = np.float64) -> None:
         data = data.data if isinstance(data, Tensor) else data
         self.data: Array = np.array(data, dtype=dtype)
