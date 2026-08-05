@@ -1,6 +1,7 @@
 import numpy as np
 import pytest
 
+import pynn.core.math as pmath
 from pynn.core import Tensor
 from pynn.core.types import Array
 
@@ -237,6 +238,79 @@ def test_cast():
     assert x.dtype == int
     x.cast(np.float32)
     assert x.dtype == np.float32
+
+
+# --------------------------------------------------------------------------- #
+# dtype
+#
+# A float32 array used to be upcast to float64 on the way in, and every gradient was
+# float64 regardless. Both are invisible until a model is twice the size and half the
+# speed it was meant to be.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("dtype", [np.float16, np.float32, np.float64])
+def test_a_floating_input_keeps_its_precision(dtype, rng):
+    tensor = Tensor(rng.standard_normal((2, 3)).astype(dtype))
+
+    assert tensor.dtype == dtype
+    assert tensor.grad.dtype == dtype
+
+
+@pytest.mark.parametrize(
+    "data", [[1, 2, 3], 4, 4.0, np.array([1, 2, 3]), np.array([True, False])]
+)
+def test_a_non_floating_input_is_promoted_to_float64(data):
+    tensor = Tensor(data)
+
+    assert tensor.dtype == np.float64
+    assert tensor.grad.dtype == np.float64
+
+
+def test_an_explicit_dtype_still_wins():
+    assert Tensor(np.zeros((2, 3), dtype=np.float64), np.float32).dtype == np.float32
+
+
+def test_a_boolean_tensor_carries_a_float_gradient():
+    """Comparisons produce bool Tensors; a gradient is real-valued regardless."""
+    result = Tensor([1.0, 2.0]) == Tensor([1.0, 3.0])
+
+    assert result.dtype == bool
+    assert result.grad.dtype == np.float64
+
+
+def test_float32_survives_a_forward_and_backward_pass(rng):
+    x = Tensor(rng.standard_normal((4, 3)).astype(np.float32))
+    w = Tensor(rng.standard_normal((3, 2)).astype(np.float32))
+
+    output = x @ w
+    assert output.dtype == np.float32
+
+    pmath.sum(output).backward()
+    assert x.grad.dtype == np.float32
+    assert w.grad.dtype == np.float32
+
+
+def test_an_explicit_seed_gradient_does_not_upcast(rng):
+    x = Tensor(rng.standard_normal((2, 3)).astype(np.float32))
+
+    (x * 2.0).backward(gradient=np.ones((2, 3), dtype=np.float64))
+
+    assert x.grad.dtype == np.float32
+
+
+def test_zero_grad_preserves_the_gradient_dtype():
+    x = Tensor(np.ones((2, 3), dtype=np.float32))
+    x.zero_grad()
+
+    assert x.grad.dtype == np.float32
+
+
+def test_cast_moves_the_gradient_dtype_with_the_data():
+    x = Tensor(np.ones((2, 3), dtype=np.float64))
+    x.cast(np.float32)
+
+    assert x.grad.dtype == np.float32
 
 
 # --------------------------------------------------------------------------- #

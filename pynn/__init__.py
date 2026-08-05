@@ -14,7 +14,15 @@ Usage (PyTorch-style):
     optimizer = SGD(model, learning_rate=0.01)
 """
 
-from pynn.core import Loss, Module, Tensor
+from pynn.core import (
+    Loss,
+    Module,
+    Tensor,
+    enable_grad,
+    is_grad_enabled,
+    no_grad,
+    set_grad_enabled,
+)
 from pynn.optim import SGD, Adadelta, Adagrad, Adam, Optimizer, RMSprop
 
 __all__ = [
@@ -27,4 +35,8 @@ __all__ = [
     "Optimizer",
     "RMSprop",
     "Tensor",
+    "enable_grad",
+    "is_grad_enabled",
+    "no_grad",
+    "set_grad_enabled",
 ]

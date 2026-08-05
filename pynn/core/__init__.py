@@ -6,6 +6,7 @@ here, and so type checkers and editors can resolve `pynn.core.X` to its definiti
 
 from .activation import Activation
 from .constants import EPSILON, MAXINT, MININT, PI, E
+from .grad_mode import enable_grad, is_grad_enabled, no_grad, set_grad_enabled
 from .initializer import Initializer
 from .loss import Loss
 from .module import Module
@@ -31,4 +32,8 @@ __all__ = [
     "Optimizer",
     "Shape",
     "Tensor",
+    "enable_grad",
+    "is_grad_enabled",
+    "no_grad",
+    "set_grad_enabled",
 ]

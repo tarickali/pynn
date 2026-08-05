@@ -19,7 +19,8 @@ from __future__ import annotations
 import numpy as np
 
 import pynn.core.math as pmath
-from pynn.core import Tensor
+import pynn.functional as F
+from pynn.core import Tensor, is_grad_enabled, no_grad
 from pynn.nn import Linear, Sequential
 from pynn.nn.factories import activation_factory, initializer_factory
 from pynn.nn.losses import MeanSquaredError
@@ -160,6 +161,62 @@ def check_autodiff() -> CheckReport:
         report.add("backward rejects a mismatched seed", False, "no error raised")
     except ValueError:
         report.add("backward rejects a mismatched seed", True)
+
+    # NumPy would otherwise handle `array + tensor` itself, coercing the Tensor to a
+    # 0-d object array: the result looks like an array, has no gradient, and every
+    # operation on it afterwards is Python-level object arithmetic.
+    left = np.full((2, 3), 3.0)
+    right = Tensor(np.ones((2, 3)))
+    product = left * right
+    report.add(
+        "an ndarray on the left still produces a Tensor",
+        isinstance(product, Tensor) and product.dtype == np.float64,
+        f"got {type(product).__name__}",
+    )
+    pmath.sum(product).backward()
+    report.add(
+        "an ndarray on the left stays on the tape",
+        bool(np.allclose(right.grad, 3.0)),
+    )
+
+    # Recording is what inference does not need. Without a gate, every evaluation
+    # batch builds a graph, and holding on to the outputs holds on to all of it.
+    x = Tensor(np.ones((2, 3)))
+    with no_grad():
+        inference = pmath.sum(F.tanh(x) * 2.0)
+    report.add(
+        "no_grad records no children",
+        inference.children == () and not inference.requires_grad,
+    )
+    try:
+        inference.backward()
+        report.add("backward rejects a tensor built under no_grad", False, "no error")
+    except RuntimeError:
+        report.add("backward rejects a tensor built under no_grad", True)
+
+    report.add("grad mode is restored after the block", is_grad_enabled())
+
+    detached = Tensor(np.ones((2, 3)))
+    pmath.sum(detached.detach() * 2.0).backward()
+    report.add(
+        "detach stops the gradient",
+        bool(np.all(detached.grad == 0.0)),
+        f"max |grad| = {np.abs(detached.grad).max():.3g}",
+    )
+
+    # A float32 input used to be upcast on the way in, and every gradient was float64
+    # regardless of the data — twice the memory, silently.
+    single = Tensor(np.ones((4, 3), dtype=np.float32))
+    weights = Tensor(np.ones((3, 2), dtype=np.float32))
+    output = single @ weights
+    pmath.sum(output).backward()
+    report.add(
+        "float32 survives a forward and backward pass",
+        single.dtype == np.float32
+        and output.dtype == np.float32
+        and single.grad.dtype == np.float32,
+        f"data {single.dtype}, output {output.dtype}, grad {single.grad.dtype}",
+    )
 
     return report
 

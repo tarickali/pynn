@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 import numpy as np
 
+from pynn.core.grad_mode import is_grad_enabled
 from pynn.core.primitives import (
     add,
     equal,
@@ -27,6 +29,22 @@ __all__ = ["Tensor"]
 TensorLike = ArrayLike
 
 
+def _no_reverse() -> None:
+    """The reverse pass of a leaf: nothing to propagate."""
+    return
+
+
+def gradient_dtype(dtype: DataType) -> DataType:
+    """The dtype a gradient takes for data of the given dtype.
+
+    A float32 parameter keeps a float32 gradient, so a half- or single-precision model
+    does not silently pay for double-precision gradients. Anything that is not a
+    floating type — integer data, the boolean results of a comparison — gets float64,
+    since a gradient is real-valued regardless of what it is a gradient of.
+    """
+    return dtype if np.issubdtype(dtype, np.floating) else np.float64
+
+
 class Tensor:
     #: Decline to participate in NumPy's ufunc dispatch. Without this, NumPy handles
     #: `array + tensor` itself by coercing the Tensor to a 0-d object array, so the
@@ -35,24 +53,78 @@ class Tensor:
     #: NotImplemented, which is what sends Python to the reflected method (NEP 13).
     __array_ufunc__ = None
 
-    def __init__(self, data: Tensor | TensorLike, dtype: DataType = np.float64) -> None:
+    def __init__(
+        self, data: Tensor | TensorLike, dtype: DataType | None = None
+    ) -> None:
+        """Wrap `data` as a Tensor.
+
+        Parameters
+        ----------
+        data : Tensor | TensorLike
+            Values to hold. A Tensor is unwrapped, and its history is not carried over.
+        dtype : DataType | None
+            Element type. The default preserves a floating-point array's precision
+            rather than promoting it — a float32 input used to become float64
+            silently — and promotes everything else (integers, Python scalars, lists)
+            to float64.
+        """
         data = data.data if isinstance(data, Tensor) else data
+        if dtype is None:
+            dtype = (
+                data.dtype
+                if isinstance(data, np.ndarray)
+                and np.issubdtype(data.dtype, np.floating)
+                else np.float64
+            )
         self.data: Array = np.array(data, dtype=dtype)
-        self.grad: Array = np.zeros_like(self.data, dtype=np.float64)
+        self.grad: Array = np.zeros(self.data.shape, dtype=gradient_dtype(self.dtype))
 
         self.forward: str | None = None
-        self.reverse = lambda: None
+        self._reverse: Callable[[], None] = _no_reverse
 
         self.children: tuple[Tensor, ...] = ()
+        #: Whether this Tensor is connected to the graph. False for one produced under
+        #: `no_grad` or by `detach`, which is what makes `backward` on it an error
+        #: rather than a silent zero.
+        self.requires_grad = True
+        #: Whether an optimizer may step this Tensor. Distinct from `requires_grad`:
+        #: a frozen parameter still receives gradients, the optimizer just skips it.
         self.trainable = True
 
     # TODO: Should I have cast be inplace?
     def cast(self, dtype: DataType) -> None:
         if dtype != self.dtype:
             self.data = self.data.astype(dtype)
+            self.grad = self.grad.astype(gradient_dtype(self.dtype))
 
     def numpy(self) -> Array:
         return self.data
+
+    def detach(self) -> Tensor:
+        """This Tensor's values, off the tape.
+
+        The result holds a copy of the data with no children and no reverse function,
+        so gradients stop here. Use it to take a value out of the graph — a running
+        statistic, a target computed from a model's own output — without turning
+        recording off everywhere.
+        """
+        detached = Tensor(self.data, dtype=self.dtype)
+        detached.requires_grad = False
+        detached.trainable = self.trainable
+        return detached
+
+    @property
+    def reverse(self) -> Callable[[], None]:
+        """Push this Tensor's gradient back to its children."""
+        return self._reverse
+
+    @reverse.setter
+    def reverse(self, function: Callable[[], None]) -> None:
+        # Dropped rather than stored when recording is off. The closure captures the
+        # forward pass's intermediate arrays, so keeping it would hold the entire
+        # graph alive behind an output that can never be differentiated — which is
+        # exactly what happens when a validation loop collects its predictions.
+        self._reverse = function if is_grad_enabled() else _no_reverse
 
     def item(self) -> Number:
         return self.data.item()
@@ -61,7 +133,17 @@ class Tensor:
         self.grad = np.zeros_like(self.grad)
 
     def add_children(self, tensors: tuple[Tensor, ...]) -> None:
+        """Record the Tensors this one was computed from.
+
+        The single gate for tape recording. With recording off the edges are dropped
+        and the output becomes a leaf that does not require gradients, so no operation
+        needs to check the mode itself.
+        """
+        if not is_grad_enabled():
+            self.requires_grad = False
+            return
         self.children += tensors
+        self.requires_grad = any(child.requires_grad for child in tensors)
 
     def backward(self, gradient: Array | Number | None = None) -> None:
         """Accumulate gradients into every tensor this one was computed from.
@@ -80,8 +162,19 @@ class Tensor:
         ValueError
             If this tensor is not a single element and no seed gradient is given,
             or if the seed gradient's shape does not match.
+        RuntimeError
+            If this tensor is not connected to the graph, because it was produced
+            under `no_grad` or detached from it.
         """
 
+        if not self.requires_grad:
+            raise RuntimeError(
+                "backward() on a Tensor that does not require gradients. It was "
+                "produced under no_grad(), or detached from the graph, so there is "
+                "nothing recorded to differentiate."
+            )
+
+        dtype = self.grad.dtype
         if gradient is None:
             if self.size != 1:
                 raise ValueError(
@@ -90,9 +183,9 @@ class Tensor:
                     "Reduce it to a scalar (e.g. with pynn.core.math.sum) or pass "
                     "gradient=... to specify the seed."
                 )
-            seed = np.ones_like(self.data, dtype=np.float64)
+            seed = np.ones(self.data.shape, dtype=dtype)
         else:
-            seed = np.asarray(gradient, dtype=np.float64)
+            seed = np.asarray(gradient, dtype=dtype)
             if seed.shape != self.data.shape:
                 raise ValueError(
                     f"gradient shape {seed.shape} does not match Tensor shape "
@@ -102,7 +195,8 @@ class Tensor:
         self.grad = self.grad + seed
 
         for tensor in reversed(self._topological_order()):
-            tensor.reverse()
+            if tensor.requires_grad:
+                tensor.reverse()
 
     def _topological_order(self) -> list[Tensor]:
         """Tensors in this graph, children before parents.
