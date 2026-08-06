@@ -1,0 +1,2 @@
+# examples/mnist.ipynb — opening it, and re-executing it headlessly.
+-e .[notebook]

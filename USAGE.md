@@ -11,50 +11,60 @@ Run everything from the repository root unless noted.
 
 | | |
 |---|---|
-| Declared support | **3.10 – 3.13** (`requires-python = ">=3.10"`, CI matrix) |
+| Declared support | **3.10 – 3.14** (`requires-python = ">=3.10"`, CI matrix) |
 | Local `.venv` | **3.14.1** (Homebrew `python@3.14`) |
 
-The local virtualenv runs a version CI does not test. Everything passes on it, but a
-3.14-only regression would not be caught by CI — see the note in
-[§7 Known gaps](#7-known-gaps).
+CI tests every version in that range, including the 3.14 this project is developed on, so
+a local pass and a CI pass mean the same thing.
 
 ### Create the environment
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
+pip install -r requirements/all.txt
 ```
 
-`.venv/` is gitignored, so it is yours to delete and rebuild at any time. Nothing in the
-repository depends on its contents.
+`.venv/` is gitignored — yours to delete and rebuild at any time. Nothing in the
+repository depends on its contents; those three commands reproduce it exactly.
 
-### Install
+### Dependency groups
 
-```bash
-pip install -e .                    # the library itself, editable
-pip install -e ".[dev]"             # + pytest, pytest-cov, ruff, mypy
-```
+`pyproject.toml` declares the extras and pins the versions. The files in
+[`requirements/`](requirements/) are one-line pointers at those extras, so there is one
+source of truth and two ways to reach it.
 
-> **`pynn` is currently *not* installed into `.venv`.** It resolves by accident from the
-> working directory (pytest adds `.` via `pythonpath`). That works from the repo root and
-> nowhere else. Run `pip install -e .` to fix it — the packaging was verified: the wheel
-> ships all six subpackages (`core`, `nn`, `functional`, `optim`, `utils`, `verify`).
-
-### Optional extras
-
-| Extra | Pulls in | Needed for |
+| Install | Group | Covers |
 |---|---|---|
-| `dev` | pytest, pytest-cov, ruff, mypy | tests, lint, types |
-| `examples` | scikit-learn | `examples/regression.py`, `examples/binary_classification.py` |
-| `mnist` | scikit-learn, pandas | `examples/mnist.py`, `scripts/download_mnist.py` |
-| `notebook` | matplotlib, pandas, jupyter | `examples/mnist.ipynb` |
-| `benchmark` | torch | `benchmarks/benchmark.py` |
-| `test` | pytest, torch, tensorflow | the `external` comparison tests |
-| `all` | everything above | |
+| `pip install -r requirements/base.txt` | — | the library, `python -m pynn.verify` |
+| `pip install -r requirements/dev.txt` | `dev` | pytest, pytest-cov, ruff, mypy — what CI installs |
+| `pip install -r requirements/examples.txt` | `examples`, `mnist` | scikit-learn, pandas |
+| `pip install -r requirements/notebook.txt` | `notebook` | matplotlib, jupyterlab, ipykernel, nbclient |
+| `pip install -r requirements/benchmark.txt` | `benchmark` | torch |
+| `pip install -r requirements/external.txt` | `external` | torch, tensorflow |
+| `pip install -r requirements/all.txt` | `all` | all of the above **except** `external` and `numba` |
+| `pip install -r requirements/numba.txt` | `numba` | numba |
+
+Equivalently `pip install -e ".[dev]"` and so on — the requirements files exist because
+`-r` is what most people reach for first.
+
+**Two groups sit outside `all` on purpose:**
+
+- **`external`** — TensorFlow lags new Python releases and has **no wheel for 3.14**, so
+  folding it in would make the one-command install fail on the very interpreter this
+  project uses. The tests that need it are marked `external` and skip themselves.
+- **`numba`** — measured 1.9x *slower* than plain NumPy on a 2000x2000 add, and it takes
+  the test suite from 1.7 s to 12.1 s. Installable only so the claim stays reproducible.
+
+### Check it worked
 
 ```bash
-pip install -e ".[dev,notebook,benchmark]"
+python -c "import pynn; print(pynn.__file__)"   # works from any directory
+python -m pynn.verify                           # 252/252 passed (OK)
 ```
+
+`requirements/all.txt` installs the library in editable mode, so `pynn` imports from
+anywhere, not only from the repository root.
 
 ---
 
@@ -172,28 +182,26 @@ results would be misleading.
 being run. Only re-run it if you change it.
 
 ```bash
-pip install -e ".[notebook]"
+pip install -r requirements/notebook.txt
 jupyter lab examples/mnist.ipynb
 ```
 
 To re-execute headlessly and write the outputs back in place:
 
 ```bash
-pip install nbclient nbformat ipykernel      # already in .venv
 python - <<'PY'
 import nbformat
 from nbclient import NotebookClient
 nb = nbformat.read("examples/mnist.ipynb", as_version=4)
-saved = nb.metadata                          # keep the generic python3 kernelspec
-NotebookClient(nb, timeout=1800, kernel_name="pynn-venv",
+NotebookClient(nb, timeout=1800, kernel_name="python3",
                resources={"metadata": {"path": "."}}).execute()
-nb.metadata = saved
 nbformat.write(nb, "examples/mnist.ipynb")
 PY
 ```
 
 Takes about 5 minutes: ~40 s for the MLP, ~3 min for the CNN, the rest is plotting.
-See [§7](#7-known-gaps) for why `kernel_name="pynn-venv"` and not `"python3"`.
+`kernel_name="python3"` is the kernel the notebook itself records, and inside this
+virtualenv it resolves to this project's interpreter — see [section 9](#9-jupyter-kernels).
 
 After editing cells, re-lint and re-format before committing:
 
@@ -229,35 +237,27 @@ Run-to-run variation is roughly ±15%. Re-measure before quoting new numbers in 
 
 ## 7. Known gaps
 
-**The local `.venv` runs Python 3.14; CI tests 3.10–3.13.** Everything passes on 3.14, so
-adding `"3.14"` to the matrix in `.github/workflows/ci.yml` would close the gap for free.
+Nothing environmental is outstanding. The three that were open are closed:
 
-**`pynn` is not installed into `.venv`.** `python -m pynn.verify` and `import pynn` work
-only from the repository root today. `pip install -e .` fixes it.
+- ~~The local venv runs a Python CI does not test~~ — 3.14 is in the CI matrix.
+- ~~`pynn` is not installed into `.venv`~~ — installed editable via `requirements/all.txt`.
+- ~~The machine's default Jupyter kernel is broken~~ — see [section 9](#9-jupyter-kernels).
 
-**The `python3` Jupyter kernel on this machine is broken.** `~/Library/Jupyter/kernels/python3`
-points at `clearpath-match-model/.venv/bin/python3`, which has no `ipykernel` installed —
-any notebook opened with the default "Python 3" kernel dies with *"Kernel died before
-replying to kernel_info"*. Two ways out:
+One dormant item remains, outside this repository: the user-level `cs224n` kernelspec at
+`~/Library/Jupyter/kernels/cs224n` points at a miniforge environment that no longer
+exists. It is harmless — a kernel is only launched if you select it — but it will fail if
+you do. Remove it with:
 
 ```bash
-# A: repoint the global kernel at something that has ipykernel
-python3 -m ipykernel install --user --name python3 --display-name "Python 3"
-
-# B: use this project's kernel (already registered, project-local)
-.venv/bin/python -m ipykernel install --sys-prefix --name pynn-venv --display-name "Python 3"
+jupyter kernelspec uninstall cs224n
 ```
-
-`B` is already done — that is what `pynn-venv` is. It lives in
-`.venv/share/jupyter/kernels/pynn-venv/`, so it disappears when the venv does, and it is
-not committed. See [§9](#9-what-pynn-venv-actually-is).
 
 ---
 
 ## 8. What CI runs
 
 `.github/workflows/ci.yml`, on every push to `main` and every pull request, across Python
-3.10 / 3.11 / 3.12 / 3.13:
+3.10 / 3.11 / 3.12 / 3.13 / 3.14:
 
 ```bash
 pip install -e ".[dev]"
@@ -281,43 +281,61 @@ ruff check pynn tests examples scripts benchmarks \
 
 ---
 
-## 9. What `pynn-venv` actually is
+## 9. Jupyter kernels
 
-A **Jupyter kernelspec** — a small JSON file telling Jupyter which Python interpreter to
-launch for a notebook:
+A **kernelspec** is a small JSON file telling Jupyter which interpreter to launch for a
+notebook. They are discovered from several locations at once, and a user-level one
+*shadows* the environment-level one of the same name — which is how a single stale file
+breaks every notebook on a machine.
 
-```json
-{
-  "argv": [".venv/bin/python", "-Xfrozen_modules=off", "-m", "ipykernel_launcher",
-           "-f", "{connection_file}"],
-  "display_name": "Python 3",
-  "language": "python"
-}
+That is what had happened here. `~/Library/Jupyter/kernels/python3` pointed at an
+unrelated project's virtualenv that had no `ipykernel` installed, so any notebook opened
+with the default "Python 3" kernel died with *"Kernel died before replying to
+kernel_info"* — in this repository and everywhere else.
+
+**Fixed by removing it**, with a backup at `~/Library/Jupyter/kernels-backup-2026-08-06/`
+in case it is ever wanted. With the stale file gone, the working kernel that `ipykernel`
+installs into each virtualenv is visible again:
+
+```
+$ jupyter kernelspec list
+  cs224n     ~/Library/Jupyter/kernels/cs224n        # dormant, see section 7
+  python3    .venv/share/jupyter/kernels/python3     # this project's interpreter
 ```
 
-It exists because the machine's default `python3` kernel points at an unrelated project's
-virtualenv (see §7). Registering one under `--sys-prefix` puts it inside `.venv/share/`
-rather than in your home directory, so it is scoped to this project, is not committed,
-and vanishes with the venv.
+That `python3` comes from `ipykernel` inside `.venv`, so it resolves to this project's
+Python whenever Jupyter runs from the activated environment. It is also the kernel
+`examples/mnist.ipynb` records in its metadata, so the notebook opens and runs with no
+special-casing — for you, and for anyone who clones the repository.
 
-The committed notebook records the **generic `python3`** kernelspec in its metadata, not
-`pynn-venv`, so it opens for anyone who clones the repository. `pynn-venv` is only used
-when *executing* it here.
+If a virtualenv ever lacks a kernel, this recreates one scoped to it:
 
-**Extras are unrelated to this.** "Extras" are the optional dependency groups in
-`pyproject.toml` — `[notebook]`, `[benchmark]`, `[dev]`, and so on. They are ordinary
-packaging metadata: `pip install -e ".[notebook]"` installs matplotlib, pandas, and
-jupyter alongside the library. Declaring them means a fresh clone can install exactly what
-a given task needs without guessing.
+```bash
+python -m ipykernel install --sys-prefix --name python3 --display-name "Python 3"
+```
+
+Use `--sys-prefix` (inside the venv), never `--user` (in your home directory) — `--user`
+is exactly what created the problem above.
 
 ---
 
 ## 10. Codecov
 
-The coverage badge in the README will read *unknown* until the repository is enabled at
-[codecov.io](https://codecov.io). CI already produces and uploads `coverage.xml`; nothing
-in the repository needs to change except adding the token. See the setup walkthrough in
-the chat, or `.github/workflows/ci.yml` for the upload step.
+The badge in the README reads *unknown* until the repository is enabled at
+[codecov.io](https://codecov.io). Everything on this side is in place: CI produces
+`coverage.xml` and uploads it with `codecov/codecov-action@v5`, passing
+`token: ${{ secrets.CODECOV_TOKEN }}`.
+
+What is left is outside the repository:
+
+1. Sign in to Codecov with GitHub and select `tarickali/pynn`.
+2. Copy the repository upload token.
+3. GitHub, repo, **Settings → Secrets and variables → Actions → New repository secret**,
+   named exactly **`CODECOV_TOKEN`**.
+4. Push to `main`. The badge resolves after the first successful upload.
+
+Do not paste Codecov's suggested workflow snippet — the upload step already exists, and a
+second one would upload the same report twice.
 
 ---
 
@@ -335,3 +353,4 @@ the chat, or `.github/workflows/ci.yml` for the upload step.
 | Benchmarks | `python -m benchmarks.benchmark --markdown` |
 | MNIST data | `python scripts/download_mnist.py` |
 | Notebook | `jupyter lab examples/mnist.ipynb` |
+| Full install | `pip install -r requirements/all.txt` |

@@ -1,0 +1,3 @@
+# examples/regression.py, examples/binary_classification.py,
+# examples/mnist.py, and scripts/download_mnist.py.
+-e .[examples,mnist]

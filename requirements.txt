@@ -1,5 +1,0 @@
-# Core runtime (required)
-numpy>=1.24
-
-# Optional: faster tensor ops (pynn works without it)
-numba>=0.57

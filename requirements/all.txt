@@ -1,0 +1,4 @@
+# Everything needed to run every part of this repository.
+# Deliberately excludes requirements/external.txt (TensorFlow has no wheel for the
+# newest Python) and requirements/numba.txt (slower than plain NumPy).
+-e .[all]

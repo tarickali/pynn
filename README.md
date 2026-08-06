@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/tarickali/pynn/actions/workflows/ci.yml/badge.svg)](https://github.com/tarickali/pynn/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/tarickali/pynn/branch/main/graph/badge.svg)](https://codecov.io/gh/tarickali/pynn)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue)](https://github.com/tarickali/pynn/actions/workflows/ci.yml)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-blue)](https://github.com/tarickali/pynn/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache%202.0-green)](LICENSE)
 
 **PyNN** is a small, NumPy-based neural network library with automatic differentiation. It provides a PyTorch-like API for building and training feedforward and convolutional models from scratch, with no dependency on PyTorch or TensorFlow.
@@ -39,15 +39,17 @@ pip install -e .
 **Optional extras** are declared in `pyproject.toml`:
 
 ```bash
-pip install -e ".[examples,mnist]"   # scikit-learn, pandas for examples
-pip install -e ".[notebook]"         # matplotlib, pandas, jupyter for examples/mnist.ipynb
-pip install -e ".[benchmark]"        # torch, for benchmarks/benchmark.py
-pip install -e ".[dev]"              # pytest, pytest-cov, ruff, mypy
-pip install -e ".[test]"             # pytest + torch + tensorflow
+pip install -r requirements/all.txt   # everything, the usual choice
+pip install -r requirements/dev.txt   # just pytest, pytest-cov, ruff, mypy
 ```
 
-Only NumPy is required at runtime. The `torch` and `tensorflow` extras are used solely by
-the optional comparison tests, which skip automatically when those packages are absent.
+The files in [`requirements/`](requirements/) are one-line pointers at the extras declared
+in `pyproject.toml`, which is where versions are pinned;
+[`requirements/README.md`](requirements/README.md) says which group covers what.
+
+Only NumPy is required at runtime — the library and `python -m pynn.verify` need nothing
+else. The `torch` and `tensorflow` extras are used solely by the optional comparison
+tests, which skip automatically when those packages are absent.
 
 ---
 
@@ -176,7 +178,7 @@ mypy                  # type check (files are configured in pyproject.toml)
 ### Continuous integration
 
 Every push and pull request to `main` runs the same checks across Python
-3.10–3.13 on GitHub Actions: `ruff check`, `ruff format --check`, `mypy`,
+3.10–3.14 on GitHub Actions: `ruff check`, `ruff format --check`, `mypy`,
 `pytest -m "not external" --cov=pynn`, and `python -m pynn.verify`. Coverage is held
 to a **95% floor** (`fail_under` in `[tool.coverage.report]`), currently at 98.6%, so
 it cannot regress silently. The workflow lives at

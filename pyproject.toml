@@ -13,43 +13,61 @@ dependencies = [
     "numpy>=1.24",
 ]
 
+# The single source of truth for what each part of the repository needs. The files in
+# requirements/ are one-line pointers at these, so versions are pinned in exactly one
+# place. See requirements/README.md for which group covers what.
+#
+# Nothing is needed beyond NumPy to import the library or to run `python -m pynn.verify`.
+# That is deliberate: the verification suite has to run wherever the library runs.
 [project.optional-dependencies]
-numba = ["numba>=0.57"]
-examples = [
-    "scikit-learn>=1.0",
-]
-mnist = [
-    "scikit-learn>=1.0",
-    "pandas>=1.0",
-]
-notebook = [
-    "matplotlib>=3.7",
-    "pandas>=1.0",
-    "jupyter>=1.0",
-]
-benchmark = [
-    "torch>=2.0",
-]
+# Tests, lint, and type checking — what CI installs.
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
     "ruff>=0.6",
     "mypy>=1.11",
 ]
-test = [
-    "pytest>=7.0",
+# examples/regression.py and examples/binary_classification.py.
+examples = [
+    "scikit-learn>=1.0",
+]
+# examples/mnist.py and scripts/download_mnist.py.
+mnist = [
+    "scikit-learn>=1.0",
+    "pandas>=1.0",
+]
+# examples/mnist.ipynb: rendering it, and re-executing it headlessly.
+notebook = [
+    "matplotlib>=3.7",
+    "pandas>=1.0",
+    "jupyterlab>=4.0",
+    "ipykernel>=6.0",
+    "nbformat>=5.0",
+    "nbclient>=0.8",
+]
+# benchmarks/benchmark.py. PyTorch only; it is the comparison target.
+benchmark = [
+    "torch>=2.0",
+]
+# The tests marked `external`, which compare against another framework.
+#
+# Kept out of `all` on purpose: TensorFlow lags new Python releases by months and has
+# no wheel for 3.14 today, so folding it into `all` would make the one-command install
+# fail on the interpreter this project is developed on. Those tests skip themselves
+# when the frameworks are absent.
+external = [
     "torch>=2.0",
     "tensorflow>=2.12",
 ]
-all = [
+# Optional and currently not recommended: measured 1.9x slower than plain NumPy on a
+# 2000x2000 add, and it takes the test suite from 1.7s to 12.1s. Kept installable so
+# the claim stays reproducible. See PROJECT_REVIEW.md Part 6, item 10.
+numba = [
     "numba>=0.57",
-    "scikit-learn>=1.0",
-    "pandas>=1.0",
-    "matplotlib>=3.7",
-    "jupyter>=1.0",
-    "pytest>=7.0",
-    "torch>=2.0",
-    "tensorflow>=2.12",
+]
+# Everything needed to run every part of the repository, on any supported Python.
+all = [
+    "pynn[dev,examples,mnist,notebook,benchmark]",
 ]
 
 [tool.setuptools.packages.find]

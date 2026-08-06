@@ -1,0 +1,3 @@
+# The tests marked `external`, which compare against another framework.
+# TensorFlow has no wheel for Python 3.14 yet; those tests skip themselves without it.
+-e .[external]

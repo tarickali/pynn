@@ -1,0 +1,3 @@
+# The library and its only runtime dependency, NumPy.
+# Enough for `import pynn` and for `python -m pynn.verify`.
+-e .

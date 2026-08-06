@@ -1,0 +1,2 @@
+# Tests, lint, and type checking. What CI installs.
+-e .[dev]
