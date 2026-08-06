@@ -13,9 +13,9 @@ dependencies = [
     "numpy>=1.24",
 ]
 
-# The single source of truth for what each part of the repository needs. The files in
-# requirements/ are one-line pointers at these, so versions are pinned in exactly one
-# place. See requirements/README.md for which group covers what.
+# The single source of truth for what each part of the repository needs. The three
+# requirements*.txt files at the root point at these, so versions are pinned in exactly
+# one place. See USAGE.md for which group covers what.
 #
 # Nothing is needed beyond NumPy to import the library or to run `python -m pynn.verify`.
 # That is deliberate: the verification suite has to run wherever the library runs.
@@ -125,6 +125,10 @@ markers = [
 
 [tool.coverage.run]
 source = ["pynn"]
+# Record paths relative to the repository root. Without this the report names an
+# absolute path from whichever machine produced it, which Codecov then has to guess
+# how to map back onto the repository.
+relative_files = true
 
 [tool.coverage.report]
 # The threshold lives here rather than in pytest's addopts so that running a single
