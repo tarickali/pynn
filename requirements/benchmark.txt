@@ -1,2 +1,0 @@
-# benchmarks/benchmark.py, which times PyNN against PyTorch on CPU.
--e .[benchmark]

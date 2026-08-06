@@ -1,0 +1,5 @@
+# Everything needed to work on the repository: tests, lint, types, the examples,
+# the notebook, and the benchmarks.
+#
+# Excludes TensorFlow — see requirements-external.txt.
+-e .[all]

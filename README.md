@@ -39,13 +39,13 @@ pip install -e .
 **Optional extras** are declared in `pyproject.toml`:
 
 ```bash
-pip install -r requirements/all.txt   # everything, the usual choice
-pip install -r requirements/dev.txt   # just pytest, pytest-cov, ruff, mypy
+pip install -r requirements-dev.txt        # tests, lint, types, examples, notebook, benchmarks
+pip install -r requirements-external.txt   # + torch and tensorflow, for the comparison tests
 ```
 
-The files in [`requirements/`](requirements/) are one-line pointers at the extras declared
-in `pyproject.toml`, which is where versions are pinned;
-[`requirements/README.md`](requirements/README.md) says which group covers what.
+Those files point at the extras declared in `pyproject.toml`, which is where versions are
+pinned. Install a single group directly with `pip install -e ".[notebook]"` and so on;
+[`USAGE.md`](USAGE.md) lists what each one covers.
 
 Only NumPy is required at runtime — the library and `python -m pynn.verify` need nothing
 else. The `torch` and `tensorflow` extras are used solely by the optional comparison

@@ -22,7 +22,7 @@ a local pass and a CI pass mean the same thing.
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements/all.txt
+pip install -r requirements-dev.txt
 ```
 
 `.venv/` is gitignored — yours to delete and rebuild at any time. Nothing in the
@@ -30,25 +30,27 @@ repository depends on its contents; those three commands reproduce it exactly.
 
 ### Dependency groups
 
-`pyproject.toml` declares the extras and pins the versions. The files in
-[`requirements/`](requirements/) are one-line pointers at those extras, so there is one
-source of truth and two ways to reach it.
+Three files cover the three situations anyone is actually in:
 
-| Install | Group | Covers |
+| File | Installs | For |
 |---|---|---|
-| `pip install -r requirements/base.txt` | — | the library, `python -m pynn.verify` |
-| `pip install -r requirements/dev.txt` | `dev` | pytest, pytest-cov, ruff, mypy — what CI installs |
-| `pip install -r requirements/examples.txt` | `examples`, `mnist` | scikit-learn, pandas |
-| `pip install -r requirements/notebook.txt` | `notebook` | matplotlib, jupyterlab, ipykernel, nbclient |
-| `pip install -r requirements/benchmark.txt` | `benchmark` | torch |
-| `pip install -r requirements/external.txt` | `external` | torch, tensorflow |
-| `pip install -r requirements/all.txt` | `all` | all of the above **except** `external` and `numba` |
-| `pip install -r requirements/numba.txt` | `numba` | numba |
+| `requirements.txt` | the library, NumPy only | running `pynn`, `python -m pynn.verify` |
+| `requirements-dev.txt` | + tests, lint, types, examples, notebook, benchmarks | working on the repository |
+| `requirements-external.txt` | + torch, tensorflow | the `external`-marked comparison tests |
 
-Equivalently `pip install -e ".[dev]"` and so on — the requirements files exist because
-`-r` is what most people reach for first.
+Finer control lives in `pyproject.toml`, which declares the extras those files point at
+and is where versions are pinned:
 
-**Two groups sit outside `all` on purpose:**
+```bash
+pip install -e ".[dev]"        # pytest, pytest-cov, ruff, mypy — what CI installs
+pip install -e ".[examples]"   # scikit-learn
+pip install -e ".[mnist]"      # + pandas
+pip install -e ".[notebook]"   # matplotlib, jupyterlab, ipykernel, nbclient
+pip install -e ".[benchmark]"  # torch
+pip install -e ".[numba]"      # not recommended; see below
+```
+
+**Two groups sit outside `requirements-dev.txt` on purpose:**
 
 - **`external`** — TensorFlow lags new Python releases and has **no wheel for 3.14**, so
   folding it in would make the one-command install fail on the very interpreter this
@@ -63,7 +65,7 @@ python -c "import pynn; print(pynn.__file__)"   # works from any directory
 python -m pynn.verify                           # 252/252 passed (OK)
 ```
 
-`requirements/all.txt` installs the library in editable mode, so `pynn` imports from
+`requirements-dev.txt` installs the library in editable mode, so `pynn` imports from
 anywhere, not only from the repository root.
 
 ---
@@ -182,7 +184,7 @@ results would be misleading.
 being run. Only re-run it if you change it.
 
 ```bash
-pip install -r requirements/notebook.txt
+pip install -e ".[notebook]"
 jupyter lab examples/mnist.ipynb
 ```
 
@@ -240,7 +242,7 @@ Run-to-run variation is roughly ±15%. Re-measure before quoting new numbers in 
 Nothing environmental is outstanding. The three that were open are closed:
 
 - ~~The local venv runs a Python CI does not test~~ — 3.14 is in the CI matrix.
-- ~~`pynn` is not installed into `.venv`~~ — installed editable via `requirements/all.txt`.
+- ~~`pynn` is not installed into `.venv`~~ — installed editable via `requirements-dev.txt`.
 - ~~The machine's default Jupyter kernel is broken~~ — see [section 9](#9-jupyter-kernels).
 
 One dormant item remains, outside this repository: the user-level `cs224n` kernelspec at
@@ -353,5 +355,5 @@ second one would upload the same report twice.
 | Benchmarks | `python -m benchmarks.benchmark --markdown` |
 | MNIST data | `python scripts/download_mnist.py` |
 | Notebook | `jupyter lab examples/mnist.ipynb` |
-| Full install | `pip install -r requirements/all.txt` |
+| Full install | `pip install -r requirements-dev.txt` |
 | Refresh READ_FILES.md | `python scripts/generate_read_files.py` |

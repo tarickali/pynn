@@ -1,0 +1,6 @@
+# The tests marked `external`, which compare against another framework.
+#
+# Separate from requirements-dev.txt because TensorFlow lags new Python releases and
+# has no wheel for 3.14, so installing it would fail on the interpreter this project
+# is developed on. Those tests skip themselves when it is absent.
+-e .[external]

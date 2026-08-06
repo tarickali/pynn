@@ -1,0 +1,6 @@
+# The library and its only runtime dependency, NumPy.
+# Enough for `import pynn` and for `python -m pynn.verify`.
+#
+# Finer-grained groups are declared as extras in pyproject.toml — for example
+# `pip install -e ".[notebook]"` for just the notebook. See USAGE.md.
+-e .

@@ -1,4 +1,0 @@
-# Optional and not recommended: measured 1.9x slower than plain NumPy,
-# and it takes the test suite from 1.7s to 12.1s. Installable so the claim stays
-# reproducible. See PROJECT_REVIEW.md Part 6, item 10.
--e .[numba]
