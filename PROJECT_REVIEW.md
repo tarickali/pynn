@@ -9,9 +9,16 @@ by reading alone. Where a bug is reported, the reproduction is included.
 incorrect in several places**, and `pip install .` produced a broken package. Both would be found
 by an interviewer in minutes.
 
-> **Status:** Tier 1 (items 1.1–1.8) is **fixed and verified**; see
-> [Part 4](#part-4--work-completed) for what changed and how it was confirmed. Tier 2, Tier 3, and
-> everything in Part 2 remain open.
+> **Status:** Tier 1 (items 1.1–1.8) and Tier 2 are **fixed and verified**. Of Part 2, sections
+> A (gradient checking), B (layers, minus the recurrent/embedding items), C (`no_grad`, `detach`,
+> iterative sort), D (`train`/`eval`, `state_dict`, recursive `parameters`, `DataLoader`-style
+> shuffling), E (tests at 98% coverage), F (CI, badges, coverage floor), and G (`DESIGN.md`,
+> benchmarks, the MNIST notebook) are done. See [Part 4](#part-4--work-completed) and
+> [Part 5](#part-5--second-pass). What remains is listed in
+> [Part 6](#part-6--what-is-still-open).
+
+> **Warning:** the per-item "open" / "fixed" markers below are the state at the time each pass was
+> written and some are stale. Part 5 and Part 6 are authoritative.
 
 ---
 
@@ -193,13 +200,13 @@ genuinely interesting to talk about.
 Status: 2.4, 2.5, 2.8, 2.9, and 2.10 were fixed alongside Tier 1. Items 2.1, 2.2, 2.3, 2.6, 2.7,
 and 2.11 remain open.
 
-#### 2.1 `freeze()` does nothing — **open**
+#### 2.1 `freeze()` does nothing — **fixed**
 
 `Module.freeze()` sets `trainable = False` on the module and its tensors, but no optimizer ever
 reads `.trainable`. Verified: a frozen `Linear`'s weights are still updated by `SGD.update()`.
 Either honor the flag in `Optimizer.update` or remove the method.
 
-#### 2.2 `Sequential` cannot be nested — **open**
+#### 2.2 `Sequential` cannot be nested — **fixed**
 
 `Sequential` subclasses `Model`, not `Module`, and its `parameters` is a `list[dict]` while
 `Module.parameters` is a `dict`. Nesting type-checks and even runs forward, then explodes at the
@@ -214,7 +221,7 @@ This is the single most valuable structural fix. Make `Sequential` a `Module`, a
 recursive `parameters()` that walks child modules. Everything in Part 2 (Dropout, BatchNorm,
 blocks, `state_dict`) gets easier once containers compose.
 
-#### 2.3 `Conv2d` bias is per-position instead of per-channel — **open**
+#### 2.3 `Conv2d` bias is per-position instead of per-channel — **fixed**
 
 `self.parameters["B"]` is built with shape `(out_channels, out_h, out_w)`. Standard `Conv2d` bias
 is `(out_channels,)`. Consequences: parameter count scales with spatial resolution (for
@@ -248,14 +255,14 @@ c(Tensor(np.zeros((2, 1, 16, 16))))   # AssertionError — spatial size locked i
 - `Loss` and shape agreement are enforced with bare `assert`, which vanishes under `python -O`.
   Raise `ValueError` in library code.
 
-#### 2.6 dtype handling — **open**
+#### 2.6 dtype handling — **fixed**
 
 `Tensor.__init__` defaults `dtype=np.float64` unconditionally, so a float32 array is **silently
 upcast**. And `self.grad` is hardcoded `np.zeros_like(self.data, dtype=np.float64)`, so an
 explicitly-float32 tensor carries a float64 gradient. Default to preserving the input dtype, and
 match the gradient dtype to the data.
 
-#### 2.7 `get_batches` never shuffles — **open**
+#### 2.7 `get_batches` never shuffles — **fixed**
 
 There is no `shuffle` parameter, so every epoch iterates identical batches in identical order —
 that is not stochastic gradient descent. All three examples are affected. Add
@@ -301,7 +308,7 @@ root, not inside `pynn/`.
 - Every test asserts only shape/value equality against torch or TF. There is no test that any
   *gradient* is correct without an external framework installed.
 
-#### 2.11 Lint / type-check baseline — **partially addressed**
+#### 2.11 Lint / type-check baseline — **fixed**
 
 Nothing is configured today. Current state if you turn the tools on:
 
@@ -733,3 +740,135 @@ Worth saying explicitly, because these are the parts you should talk about in in
   arithmetic.
 - All three examples run and converge; MNIST reaches 94% test accuracy.
 - Clean commit history with sensible, incremental messages.
+
+
+---
+
+## Part 5 — Second pass
+
+Steps 8–15 of the plan in Part 3, plus the structural work in Part 2 that they depended on.
+
+### Measured effect
+
+| | After Tier 1 | Now |
+|---|---|---|
+| Line coverage | 84% | **98.6%**, with a 95% floor enforced in CI |
+| `pytest -m "not external"` | 175 passed | **541 passed** |
+| `python -m pynn.verify` | 187 checks | **252 checks** |
+| Gradient-checked operations | 111 | **151** |
+| `Sequential([Sequential([...]), ...])` | `AttributeError` in `update()` | trains |
+| Evaluating a model | builds a full graph and discards it | `no_grad()` records nothing |
+| A float32 array through `Tensor` | silently float64 | stays float32, gradient included |
+| `get_batches` | identical order every epoch | shuffled, with a seedable generator |
+
+### Coverage
+
+Whole modules had no tests: the class-based losses, the class-based activations, both factories,
+and `pynn/utils/data.py` at 21%. Closing them took the total from 92% to 98.6%. The threshold
+lives in `[tool.coverage.report]` rather than pytest's `addopts`, so running a single test file
+does not fail for covering a single module; CI opts in by passing `--cov=pynn`.
+
+Writing the missing `Tensor` tests surfaced a live bug: NumPy won the dispatch for
+`array + tensor` and coerced the Tensor to a 0-d object array, so `__radd__` was never called and
+the result was an object-dtype array with no gradient. `__array_ufunc__ = None` (NEP 13) hands
+those back to the reflected methods.
+
+### The module tree
+
+`Sequential` subclassed a separate `Model` type whose `parameters` was a `list[dict]` while
+`Module.parameters` was a `dict`. `Module` now owns the tree:
+
+- Child modules register automatically on attribute assignment, so a user-written composite layer
+  does not silently train nothing.
+- `named_parameters`, `parameter_groups`, `named_buffers`, `state_dict`, `zero_grad`,
+  `train`/`eval`, `freeze`/`unfreeze` and `num_parameters` all walk it recursively.
+- `parameter_groups()` hands the optimizer the modules' **live** dictionaries, which is what keeps
+  lazily built layers working.
+- Optimizers take the model itself (`SGD(model, ...)`), and raise a `TypeError` naming the fix
+  rather than silently stepping nothing when handed the old `model.parameters`.
+- `Model` had nothing left to do and was removed.
+
+`summary()` now reports parameter shapes and counts instead of returning live Tensors, and
+`Optimizer` gained `step()` and `zero_grad()` aliases.
+
+### New layers
+
+`Dropout`, `LayerNorm`, `BatchNorm1d`, `BatchNorm2d`, `MaxPool2d`, `AvgPool2d` — each a functional
+op with a hand-written reverse plus an `nn` Module with a lazy build, and each on the gradcheck
+sweep in both its plain and reused-input forms.
+
+The normalization reverses are written out rather than composed from primitives, because the mean
+and the variance depend on every element being normalized. Batch normalization at evaluation is a
+genuinely different function (fixed statistics, so the gradient does not pass through them) and is
+checked separately. Running statistics are **buffers**: `Module.register_buffer` keeps them out of
+`parameter_groups` and inside `state_dict`.
+
+### Autodiff controls
+
+`no_grad()` / `enable_grad()` / `set_grad_enabled()`, `Tensor.detach()`, and a real
+`requires_grad`, deliberately separate from `trainable` (a frozen parameter still receives
+gradients; the optimizer is what skips it). Recording is gated in exactly two places inside
+`Tensor` — `add_children` and the `reverse` setter — so no operation checks the mode itself. The
+second gate is the one that matters for memory: the closure captures the forward pass's
+intermediates, so a validation loop that collects predictions would otherwise retain every batch's
+graph.
+
+### Reproducibility and dtypes
+
+`pynn.core.random` holds one generator shared by the initializers and `Dropout`, so a single
+`set_seed(n)` covers a whole run. `Tensor` preserves a floating input's precision and matches the
+gradient dtype to the data.
+
+### An initialization bug found on the way
+
+Building the notebook's CNN surfaced one that had been there all along: `he_normal` and
+friends computed the fan-in as `shape[0]`, which is fan-in only for a 2-D `(in, out)`
+weight matrix. For a `Conv2d` kernel, shaped `(out_channels, in_channels, kh, kw)`, that
+reads the *output* channel count and drops the receptive field entirely — `Conv2d(16, 32, 3)`
+came out with a standard deviation of 0.25 instead of 0.118, a factor of 2.1.
+
+The weights still looked plausible, so nothing failed. What it did was compound through
+depth: activations grew ~2x per layer, initial logits reached a standard deviation of 7.8,
+the first loss was 15.2 instead of ln(10) ≈ 2.3, and the network collapsed into predicting
+a constant at a learning rate a correctly initialized one handles. `fans()` now branches on
+rank, since a `Linear` weight is `(in, out)` and a `Conv2d` kernel is `(out, in, kh, kw)`.
+
+### Presentation
+
+- `docs/DESIGN.md` — the tape, the topological sort, `unbroadcast`, why the losses are fused, the
+  module tree, `no_grad`, im2col, and what was left out.
+- `benchmarks/benchmark.py` — PyNN against PyTorch on CPU. 1.7x on a matmul-dominated MLP, ~10x on
+  a CNN. Reported, not hidden.
+- `examples/mnist.ipynb` — training curves, confusion matrix, misclassified digits, first-layer
+  weights as 28×28 images, a CNN with its learned kernels and feature maps, and a checkpoint round
+  trip. Executed, so it renders on GitHub.
+- README: CI, coverage, Python-version and licence badges; benchmark table; accurate API tables.
+
+---
+
+## Part 6 — What is still open
+
+Nothing here is a correctness bug. In rough order of value:
+
+1. **`ModuleList` / `ModuleDict`.** A list of modules assigned to an attribute is not registered —
+   the one real gap left in the module tree.
+2. **Differentiable indexing, `concat`, `stack`, `split`.** `Tensor.__getitem__` returns a raw
+   NumPy array and drops the graph. Needed before attention or `Embedding`.
+3. **`Embedding` and a recurrent cell.** Backprop-through-time is the most interview-relevant thing
+   missing; the iterative topological sort already exists to support it.
+4. **More losses and optimizers.** `AdamW`, learning-rate schedulers, gradient clipping,
+   `HuberLoss`, `BCEWithLogitsLoss` as a distinct class, sparse/integer-label cross-entropy, a
+   uniform `reduction` argument.
+5. **More activations.** `GELU`, `SiLU`, `LogSoftmax`, `PReLU` (a learnable activation, which is a
+   good test that `Activation` and `Module` compose).
+6. **`CONTRIBUTING.md`** with a "how to add a layer" walkthrough, `CHANGELOG.md`, a tagged
+   `v0.1.0`.
+7. **Packaging polish.** `py.typed`, `__version__` in `pynn/__init__.py`, deleting the redundant
+   `requirements*.txt`, TestPyPI.
+8. **`.pre-commit-config.yaml`.**
+9. **A graph visualizer** (`Tensor.to_dot()`), and Hypothesis property tests over `unbroadcast`.
+10. **Numba removal.** Step 8 of Part 3 was never carried out. `pynn/core/primitives.py` still
+    decorates every elementwise primitive with `@njit` (a no-op fallback when Numba is absent),
+    `requirements*.txt` still list it, and the measurements in 1.8 still stand: 1.9x slower than
+    plain NumPy on a 2000x2000 add, and a test suite that goes from 1.7s to 12.1s with it
+    installed.

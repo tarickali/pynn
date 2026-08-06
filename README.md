@@ -1,6 +1,15 @@
 # PyNN
 
+[![CI](https://github.com/tarickali/pynn/actions/workflows/ci.yml/badge.svg)](https://github.com/tarickali/pynn/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/tarickali/pynn/branch/main/graph/badge.svg)](https://codecov.io/gh/tarickali/pynn)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue)](https://github.com/tarickali/pynn/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache%202.0-green)](LICENSE)
+
 **PyNN** is a small, NumPy-based neural network library with automatic differentiation. It provides a PyTorch-like API for building and training feedforward and convolutional models from scratch, with no dependency on PyTorch or TensorFlow.
+
+Every differentiable operation is checked against central-difference numerical gradients
+— 151 checks, including branching graph topologies — and the design decisions behind the
+tape are written up in [`docs/DESIGN.md`](docs/DESIGN.md).
 
 ---
 
@@ -13,9 +22,9 @@
 - **Activations** — Identity, ReLU (and LeakyReLU), Sigmoid, Tanh, Softmax (with configurable axis), ELU, SELU, SoftPlus, Affine.
 - **Losses** — Binary and categorical cross-entropy (logits or probabilities), mean squared error, mean absolute error; MSE supports `reduction='mean'` or `'sum'`.
 - **Optimizers** — SGD (momentum, weight decay, Nesterov), Adam, RMSprop, Adagrad, Adadelta, with standard hyperparameters.
-- **Initializers** — Zeros, ones, constant, random uniform/normal, Xavier (Glorot), He, and LeCun variants (uniform and normal).
-- **Utilities** — `one_hot`, batched data iteration (`get_batches`), and helpers for training loops.
-- **Verified gradients** — every differentiable operation is checked against central-difference numerical gradients, including broadcasting and non-linear graph topologies (shared inputs, residual connections, tied weights). The checker is public API: see [Gradient checking](#gradient-checking).
+- **Initializers** — Zeros, ones, constant, random uniform/normal, Xavier (Glorot), He, and LeCun variants (uniform and normal). Fan-in and fan-out are read from the weight layout, so a `Conv2d` kernel is scaled by its receptive field rather than by its output-channel count.
+- **Utilities** — `one_hot`, shuffled batch iteration (`get_batches`), `im2col` / `col2im`, and `set_seed` for a reproducible run.
+- **Verified gradients** — every differentiable operation is checked against central-difference numerical gradients, including broadcasting and non-linear graph topologies (shared inputs, residual connections, tied weights). The checker is public API: see [Verification](#verification).
 
 ---
 
@@ -31,7 +40,9 @@ pip install -e .
 
 ```bash
 pip install -e ".[examples,mnist]"   # scikit-learn, pandas for examples
-pip install -e ".[dev]"              # pytest
+pip install -e ".[notebook]"         # matplotlib, pandas, jupyter for examples/mnist.ipynb
+pip install -e ".[benchmark]"        # torch, for benchmarks/benchmark.py
+pip install -e ".[dev]"              # pytest, pytest-cov, ruff, mypy
 pip install -e ".[test]"             # pytest + torch + tensorflow
 ```
 
@@ -95,6 +106,9 @@ Activations and initializers can be specified by string in layers (e.g. `activat
 
 From the project root:
 
+The [MNIST notebook](examples/mnist.ipynb) renders inline on GitHub: training curves,
+a confusion matrix, and the learned first-layer filters.
+
 ```bash
 # Regression
 python -m examples.regression
@@ -156,14 +170,16 @@ ruff format .         # format
 mypy                  # type check (files are configured in pyproject.toml)
 ```
 
-`ruff check` and `mypy` are both clean across `pynn`, `tests`, `examples`, and
-`scripts`.
+`ruff check` and `mypy` are both clean across `pynn`, `tests`, `examples`,
+`scripts`, and `benchmarks` — including the code cells of `examples/mnist.ipynb`.
 
 ### Continuous integration
 
-Every push and pull request to `main` runs the same four checks across Python
+Every push and pull request to `main` runs the same checks across Python
 3.10–3.13 on GitHub Actions: `ruff check`, `ruff format --check`, `mypy`,
-`pytest -m "not external"`, and `python -m pynn.verify`. The workflow lives at
+`pytest -m "not external" --cov=pynn`, and `python -m pynn.verify`. Coverage is held
+to a **95% floor** (`fail_under` in `[tool.coverage.report]`), currently at 98.6%, so
+it cannot regress silently. The workflow lives at
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
 ---
@@ -210,10 +226,10 @@ python -m pynn.verify stability    # one suite
 
 ```
 gradients: 151/151 passed (OK)
-invariants: 78/78 passed (OK)
+invariants: 81/81 passed (OK)
 stability: 20/20 passed (OK)
 
-pynn.verify: 249/249 passed (OK)
+pynn.verify: 252/252 passed (OK)
 ```
 
 Three suites:
@@ -253,6 +269,40 @@ assert result.passed
 
 The `tests/` suite covers the same ground for CI, and `tests/test_verify.py` drives these
 suites so they cannot rot.
+
+---
+
+## Benchmarks
+
+PyNN against PyTorch on CPU, same architecture and batch size on both, median over 30
+steps of forward + backward + optimizer step:
+
+| Model | Batch | Parameters | pynn ms/step | torch ms/step | Ratio | pynn examples/s |
+|---|---|---|---|---|---|---|
+| MLP 784-256-256-10 | 128 | 269,322 | 3.7 | 2.2 | 1.7x | 34,192 |
+| CNN 2 conv + 2 pool | 64 | 20,522 | 78.6 | 7.8 | 10.1x | 814 |
+
+*Python 3.14, NumPy 2.4, PyTorch 2.13, Apple M-series CPU. Both libraries at their own
+threading defaults. Run-to-run variation is roughly ±15%; reproduce with*
+`python -m benchmarks.benchmark`.
+
+Being slower than PyTorch is the expected outcome — the interesting part is the gap
+between the two rows. The MLP is dominated by `matmul`, where both libraries hand the
+work to the same BLAS, so PyNN's overhead is the per-operation Python dispatch and it
+lands within about 2x. The CNN is where PyTorch's fused, multithreaded convolution
+kernels pull away: PyNN's `conv2d` is im2col plus a single `gemm` (a 10–100x improvement
+over the Python loop it replaced), but it still materializes the column matrix and runs
+the `col2im` scatter in the reverse pass.
+
+---
+
+## Design
+
+[`docs/DESIGN.md`](docs/DESIGN.md) covers the parts worth explaining rather than reading:
+why define-by-run over a static graph, how the tape is built from closures, the iterative
+topological sort, how broadcasting is reversed, why softmax and cross-entropy are fused,
+the `Module` tree and why `Sequential` had to become one, how `no_grad` turns recording
+off in two places, and what was deliberately left out.
 
 ---
 
