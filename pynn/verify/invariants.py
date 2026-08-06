@@ -21,6 +21,7 @@ import numpy as np
 import pynn.core.math as pmath
 import pynn.functional as F
 from pynn.core import Tensor, is_grad_enabled, no_grad
+from pynn.functional.initializers import fans, he_normal
 from pynn.nn import BatchNorm1d, Dropout, Linear, Sequential
 from pynn.nn.factories import activation_factory, initializer_factory
 from pynn.nn.losses import MeanSquaredError
@@ -439,6 +440,27 @@ def check_api() -> CheckReport:
         "Linear infers in_features on first forward",
         lazy.in_features == 4 and output.shape == (5, 6),
         f"in_features={lazy.in_features}, output {output.shape}",
+    )
+
+    # The scale a variance-scaling initializer picks is a function of the fan-in and
+    # fan-out. Reading them off the wrong axes leaves the weights at a plausible
+    # magnitude, so nothing looks wrong until a convolutional stack will not train.
+    report.add(
+        "fans reads a Linear weight as (in, out)",
+        fans((784, 256)) == (784, 256),
+        f"{fans((784, 256))}",
+    )
+    report.add(
+        "fans reads a Conv2d kernel through its receptive field",
+        fans((32, 16, 3, 3)) == (144, 288),
+        f"{fans((32, 16, 3, 3))} (expected (144, 288))",
+    )
+    kernel = he_normal((32, 16, 3, 3), rng=np.random.default_rng(0)).data
+    report.add(
+        "he_normal scales a conv kernel by its fan-in",
+        bool(np.isclose(kernel.std(), np.sqrt(2.0 / 144), rtol=0.05)),
+        f"std {kernel.std():.4f}, expected {np.sqrt(2.0 / 144):.4f}, "
+        f"the out-channel reading would give {np.sqrt(2.0 / 32):.4f}",
     )
 
     unknown_rejected = True
