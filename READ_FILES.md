@@ -1,0 +1,541 @@
+# READ_FILES — how the project got here
+
+Every commit in the repository, oldest first, with the files it touched. Read it to see
+which files carry the most history and in what order they changed.
+
+**24 commits**, 2024-08-29 to 2026-08-05.
+
+Status codes: `added` · `modified` · `deleted` · `renamed`.
+
+---
+
+## Contents
+
+- [Era 1 — the original library](#era-1--the-original-library) — 7 commits (e2e7d87 … 3d45b70)
+- [Era 2 — first refactor](#era-2--first-refactor) — 4 commits (f7e7aa9 … 19a60cf)
+- [Era 3 — correctness pass](#era-3--correctness-pass) — 6 commits (b904fa8 … 95cb352)
+- [Era 4 — structure and presentation](#era-4--structure-and-presentation) — 7 commits (2c3e1d1 … 6f7336d)
+- [Files by number of commits](#files-by-number-of-commits)
+
+---
+
+## Era 1 — the original library
+
+The library as first written: the Tensor wrapper, the closure-based tape, activations, losses, and the first layers.
+
+### `e2e7d87` — Initial commit
+
+*2024-08-29* · 3 files changed, 365 insertions(+)
+
+- `.gitignore` *(added)*
+- `LICENSE` *(added)*
+- `README.md` *(added)*
+
+### `2b1cfef` — Implemented initial Tensor wrapper of a NumPy array.
+
+*2024-09-04* · 10 files changed, 396 insertions(+)
+
+- `README.md` *(modified)*
+- `pynn/__init__.py` *(added)*
+- `pynn/core/__init__.py` *(added)*
+- `pynn/core/constants.py` *(added)*
+- `pynn/core/tensor.py` *(added)*
+- `pynn/core/types.py` *(added)*
+- `pynn/core/utils.py` *(added)*
+- `pyproject.toml` *(added)*
+- `tests/__init__.py` *(added)*
+- `tests/core/tensor_test.py` *(added)*
+
+### `42d9e92` — Add tensor util functions and numba jit primitives.
+
+*2024-09-04* · 5 files changed, 280 insertions(+), 19 deletions(-)
+
+- `pynn/core/primitives.py` *(added)*
+- `pynn/core/tensor.py` *(modified)*
+- `pynn/core/types.py` *(modified)*
+- `pynn/core/utils.py` *(modified)*
+- `tests/core/utils_test.py` *(added)*
+
+### `78c9058` — Added math primitives and functions with gradient computation for Tensors
+
+*2024-09-05* · 8 files changed, 353 insertions(+), 133 deletions(-)
+
+- `pynn/core/math/__init__.py` *(added)*
+- `pynn/core/math/functions.py` *(added)*
+- `pynn/core/primitives.py` → `pynn/core/math/primitives.py` *(renamed)*
+- `pynn/core/tensor.py` *(modified)*
+- `pynn/core/types.py` *(modified)*
+- `pynn/core/utils.py` *(modified)*
+- `tests/core/math_test.py` *(added)*
+- `tests/core/utils_test.py` *(modified)*
+
+### `8257169` — Added functional and class-based implementations for common activation functions
+
+*2024-09-05* · 14 files changed, 469 insertions(+)
+
+- `pynn/core/activation.py` *(added)*
+- `pynn/core/initializer.py` *(added)*
+- `pynn/core/loss.py` *(added)*
+- `pynn/core/optimizer.py` *(added)*
+- `pynn/functional/__init__.py` *(added)*
+- `pynn/functional/activations.py` *(added)*
+- `pynn/nn/__init__.py` *(added)*
+- `pynn/nn/activations.py` *(added)*
+- `pynn/nn/initializers.py` *(added)*
+- `pynn/nn/losses.py` *(added)*
+- `pynn/nn/optimizers.py` *(added)*
+- `tests/core/__init__.py` *(added)*
+- `tests/functional/__init__.py` *(added)*
+- `tests/functional/activations_test.py` *(added)*
+
+### `f7306e6` — Added functional and class-based initializers and losses.
+
+*2024-09-05* · 17 files changed, 525 insertions(+), 30 deletions(-)
+
+- `pynn/core/__init__.py` *(modified)*
+- `pynn/core/activation.py` *(modified)*
+- `pynn/core/initializer.py` *(modified)*
+- `pynn/core/loss.py` *(modified)*
+- `pynn/core/math/functions.py` → `pynn/core/math.py` *(renamed)*
+- `pynn/core/math/__init__.py` *(deleted)*
+- `pynn/core/optimizer.py` *(modified)*
+- `pynn/core/math/primitives.py` → `pynn/core/primitives.py` *(renamed)*
+- `pynn/core/tensor.py` *(modified)*
+- `pynn/functional/activations.py` *(modified)*
+- `pynn/functional/initializers.py` *(added)*
+- `pynn/functional/losses.py` *(added)*
+- `pynn/nn/activations.py` *(modified)*
+- `pynn/nn/initializers.py` *(modified)*
+- `pynn/nn/losses.py` *(modified)*
+- `tests/core/math_test.py` *(modified)*
+- `tests/functional/losses_test.py` *(added)*
+
+### `3d45b70` — Added initial linear, conv2d, and flatten modules to create models
+
+*2024-09-06* · 4 files changed, 495 insertions(+)
+
+- `pynn/core/module.py` *(added)*
+- `pynn/functional/modules.py` *(added)*
+- `pynn/nn/factories.py` *(added)*
+- `pynn/nn/modules.py` *(added)*
+
+---
+
+## Era 2 — first refactor
+
+Package layout settles into `core` / `functional` / `nn` / `optim` / `utils`; optimizers and packaging metadata arrive.
+
+### `f7e7aa9` — Refactor: modules, utils package, optimizers, scripts
+
+*2026-03-07* · 31 files changed, 1206 insertions(+), 117 deletions(-)
+
+> - Extended conv2d to support padding and stride. - Modified linear to work without initial input shape. - Examples: added example drivers for regression, mnist, and regression. - Scripts: added script to download mnist and a smoke test to ensure   functionality. - Move optimizer implementations to optim/ (sgd, adam, rmsprop, adagrad, adadelta); keep Optimizer ABC in core - Move core/data_utils.py to utils/data.py (one_hot, get_batches) - Implemented utils: tensor: get_data_and_grad; array: make_pair, pad_for_conv
+
+- `.gitignore` *(modified)*
+- `README.md` *(modified)*
+- `examples/binary_classification.py` *(added)*
+- `examples/mnist.py` *(added)*
+- `examples/regression.py` *(added)*
+- `pynn/__init__.py` *(modified)*
+- `pynn/core/__init__.py` *(modified)*
+- `pynn/core/model.py` *(added)*
+- `pynn/core/module.py` *(modified)*
+- `pynn/core/primitives.py` *(modified)*
+- `pynn/core/tensor.py` *(modified)*
+- `pynn/functional/activations.py` *(modified)*
+- `pynn/functional/modules.py` *(modified)*
+- `pynn/nn/__init__.py` *(modified)*
+- `pynn/nn/factories.py` *(modified)*
+- `pynn/nn/losses.py` *(modified)*
+- `pynn/nn/models.py` *(added)*
+- `pynn/nn/modules.py` *(modified)*
+- `pynn/nn/optimizers.py` *(deleted)*
+- `pynn/optim/__init__.py` *(added)*
+- `pynn/optim/adadelta.py` *(added)*
+- `pynn/optim/adagrad.py` *(added)*
+- `pynn/optim/adam.py` *(added)*
+- `pynn/optim/rmsprop.py` *(added)*
+- `pynn/optim/sgd.py` *(added)*
+- `pynn/utils/__init__.py` *(added)*
+- `pynn/utils/array.py` *(added)*
+- `pynn/utils/data.py` *(added)*
+- `pynn/utils/tensor.py` *(added)*
+- `scripts/download_mnist.py` *(added)*
+- `scripts/smoke_test.py` *(added)*
+
+### `a07ef1b` — fix and extend softmax; extend mean squared loss with reduction
+
+*2026-03-07* · 5 files changed, 52 insertions(+), 21 deletions(-)
+
+- `pynn/functional/activations.py` *(modified)*
+- `pynn/functional/losses.py` *(modified)*
+- `pynn/nn/activations.py` *(modified)*
+- `pynn/nn/factories.py` *(modified)*
+- `pynn/nn/losses.py` *(modified)*
+
+### `4223e15` — add pyproject and requirements
+
+*2026-03-07* · 3 files changed, 68 insertions(+), 3 deletions(-)
+
+- `pyproject.toml` *(modified)*
+- `requirements-dev.txt` *(added)*
+- `requirements.txt` *(added)*
+
+### `19a60cf` — add extended readme for new features
+
+*2026-03-07* · 1 file changed, 96 insertions(+), 27 deletions(-)
+
+- `README.md` *(modified)*
+
+---
+
+## Era 3 — correctness pass
+
+Every Tier 1 bug from PROJECT_REVIEW.md, plus the `pynn.verify` suite, pinned lint/type config, the im2col `conv2d`, and CI.
+
+### `b904fa8` — fix autodiff correctness bugs; add pynn.verify self-check suite
+
+*2026-08-05* · 32 files changed, 3625 insertions(+), 392 deletions(-)
+
+> Correctness: - Accumulate into `grad` instead of overwriting it across every reverse closure in   core/math, functional/activations, functional/losses, and functional/modules.   Overwriting is exactly correct when a tensor has one consumer, so it only showed   up in branched graphs. - Replace expand_array/shrink_array with `unbroadcast`, which sums the incoming   gradient over broadcast axes. The old pair rescaled already-accumulated   gradients, so a bias grad of [4,4] became [20,20] instead of [8,8]. - Keep `Tensor.transpose` on the tape; it previously returned a detached Tensor and   silently zeroed the gradient. - Fuse sigmoid into binary_crossentropy and softmax into categorical_crossentropy,   and differentiate with respect to the logits. The unfused version applied the   softmax Jacobian twice. MNIST test accuracy 94% -> 97.9%. - Fix the SGD momentum buffer: momentum * v + (1 - dampening) * g. With the old   `dampening * g` and the default dampening of 0, the buffer decayed to zero and   momentum did nothing. - Standardize `maximize` across all five optimizers by negating the gradient once,   and key state initialization off parameter presence rather than `time == 1` so   lazily built layers are handled. - Add `__rtruediv__`/`__rmatmul__`, give `__truediv__` its own backward pass instead   of routing through `other ** -1`, and raise TypeError rather than ValueError for   type errors.
+
+- `PROJECT_REVIEW.md` *(added)*
+- `README.md` *(modified)*
+- `examples/binary_classification.py` *(modified)*
+- `examples/mnist.py` *(modified)*
+- `pynn/core/math.py` *(modified)*
+- `pynn/core/numeric.py` *(added)*
+- `pynn/core/tensor.py` *(modified)*
+- `pynn/core/utils.py` *(modified)*
+- `pynn/functional/activations.py` *(modified)*
+- `pynn/functional/losses.py` *(modified)*
+- `pynn/functional/modules.py` *(modified)*
+- `pynn/nn/activations.py` *(modified)*
+- `pynn/optim/adadelta.py` *(modified)*
+- `pynn/optim/adagrad.py` *(modified)*
+- `pynn/optim/adam.py` *(modified)*
+- `pynn/optim/rmsprop.py` *(modified)*
+- `pynn/optim/sgd.py` *(modified)*
+- `pynn/verify/__init__.py` *(added)*
+- `pynn/verify/__main__.py` *(added)*
+- `pynn/verify/gradients.py` *(added)*
+- `pynn/verify/invariants.py` *(added)*
+- `pynn/verify/report.py` *(added)*
+- `pynn/verify/stability.py` *(added)*
+- `pyproject.toml` *(modified)*
+- `tests/core/math_test.py` *(modified)*
+- `tests/core/utils_test.py` *(modified)*
+- `tests/functional/activations_test.py` *(modified)*
+- `tests/functional/losses_test.py` *(modified)*
+- `tests/optim/__init__.py` *(added)*
+- `tests/optim/optimizers_test.py` *(added)*
+- `tests/test_gradcheck.py` *(added)*
+- `tests/test_verify.py` *(added)*
+
+### `24280e9` — add pinned ruff/mypy config; make lint and type checking clean
+
+*2026-08-05* · 49 files changed, 536 insertions(+), 252 deletions(-)
+
+> Tooling is now configured in pyproject.toml rather than relying on whichever ruff/mypy version is installed, and ruff/mypy are in the `dev` extra. `ruff check` and `mypy` are clean across pynn, tests, examples, and scripts.
+
+- `README.md` *(modified)*
+- `examples/mnist.py` *(modified)*
+- `examples/regression.py` *(modified)*
+- `pynn/__init__.py` *(modified)*
+- `pynn/core/__init__.py` *(modified)*
+- `pynn/core/activation.py` *(modified)*
+- `pynn/core/constants.py` *(modified)*
+- `pynn/core/initializer.py` *(modified)*
+- `pynn/core/loss.py` *(modified)*
+- `pynn/core/math.py` *(modified)*
+- `pynn/core/model.py` *(modified)*
+- `pynn/core/module.py` *(modified)*
+- `pynn/core/optimizer.py` *(modified)*
+- `pynn/core/primitives.py` *(modified)*
+- `pynn/core/tensor.py` *(modified)*
+- `pynn/core/types.py` *(modified)*
+- `pynn/core/utils.py` *(modified)*
+- `pynn/functional/__init__.py` *(modified)*
+- `pynn/functional/activations.py` *(modified)*
+- `pynn/functional/initializers.py` *(modified)*
+- `pynn/functional/losses.py` *(modified)*
+- `pynn/functional/modules.py` *(modified)*
+- `pynn/nn/__init__.py` *(modified)*
+- `pynn/nn/activations.py` *(modified)*
+- `pynn/nn/factories.py` *(modified)*
+- `pynn/nn/initializers.py` *(modified)*
+- `pynn/nn/losses.py` *(modified)*
+- `pynn/nn/models.py` *(modified)*
+- `pynn/nn/modules.py` *(modified)*
+- `pynn/optim/__init__.py` *(modified)*
+- `pynn/optim/adadelta.py` *(modified)*
+- `pynn/optim/adagrad.py` *(modified)*
+- `pynn/optim/adam.py` *(modified)*
+- `pynn/optim/rmsprop.py` *(modified)*
+- `pynn/optim/sgd.py` *(modified)*
+- `pynn/utils/__init__.py` *(modified)*
+- `pynn/utils/data.py` *(modified)*
+- `pynn/verify/__main__.py` *(modified)*
+- `pynn/verify/gradients.py` *(modified)*
+- `pynn/verify/invariants.py` *(modified)*
+- `pyproject.toml` *(modified)*
+- `scripts/download_mnist.py` *(modified)*
+- `scripts/smoke_test.py` *(modified)*
+- `tests/conftest.py` *(added)*
+- `tests/core/math_test.py` *(modified)*
+- `tests/core/tensor_test.py` *(modified)*
+- `tests/functional/losses_test.py` *(modified)*
+- `tests/optim/optimizers_test.py` *(modified)*
+- `tests/test_gradcheck.py` *(modified)*
+
+### `0f36fd2` — fix freeze, Conv2d bias, and Tensor comparison truthiness
+
+*2026-08-05* · 14 files changed, 408 insertions(+), 65 deletions(-)
+
+> Optimizers now skip frozen parameters, Conv2d bias is one value per output channel, and bool(tensor) raises for multi-element results so `if a == b` cannot silently succeed.
+
+- `pynn/core/module.py` *(modified)*
+- `pynn/core/optimizer.py` *(modified)*
+- `pynn/core/tensor.py` *(modified)*
+- `pynn/functional/modules.py` *(modified)*
+- `pynn/nn/modules.py` *(modified)*
+- `pynn/optim/adadelta.py` *(modified)*
+- `pynn/optim/adagrad.py` *(modified)*
+- `pynn/optim/adam.py` *(modified)*
+- `pynn/optim/rmsprop.py` *(modified)*
+- `pynn/optim/sgd.py` *(modified)*
+- `tests/core/tensor_test.py` *(modified)*
+- `tests/nn/__init__.py` *(added)*
+- `tests/nn/modules_test.py` *(added)*
+- `tests/optim/optimizers_test.py` *(modified)*
+
+### `d632504` — consolidate gradcheck tests with the verify sweep
+
+*2026-08-05* · 4 files changed, 232 insertions(+), 458 deletions(-)
+
+> Parametrize pytest over gradient_cases so each failure names the op, and keep only the closed-form and formulation-agreement checks that the sweep cannot express.
+
+- `pynn/verify/__init__.py` *(modified)*
+- `pynn/verify/gradients.py` *(modified)*
+- `tests/test_gradcheck.py` *(modified)*
+- `tests/test_verify.py` *(modified)*
+
+### `45d61df` — rewrite conv2d with im2col and a single matmul
+
+*2026-08-05* · 4 files changed, 233 insertions(+), 51 deletions(-)
+
+> Replace the Python loop over output positions with strided im2col plus one BLAS gemm, and add col2im for the reverse pass.
+
+- `pynn/functional/modules.py` *(modified)*
+- `pynn/utils/array.py` *(modified)*
+- `tests/utils/__init__.py` *(added)*
+- `tests/utils/array_test.py` *(added)*
+
+### `95cb352` — add GitHub Actions CI across Python 3.10-3.13
+
+*2026-08-05* · 2 files changed, 56 insertions(+)
+
+> Run ruff, format check, mypy, pytest, and pynn.verify on every push and pull request so the correctness guarantees stay credible.
+
+- `.github/workflows/ci.yml` *(added)*
+- `README.md` *(modified)*
+
+---
+
+## Era 4 — structure and presentation
+
+The module tree, the new layers, `no_grad`, coverage, and the docs. This is the most recent session.
+
+### `2c3e1d1` — raise coverage to 98% and guard it with a floor
+
+*2026-08-05* · 15 files changed, 1074 insertions(+), 20 deletions(-)
+
+> Coverage was 92% with whole modules untested: the class-based losses and activations, both factories, and pynn/utils/data.py at 21%. The threshold lives in [tool.coverage.report] rather than pytest's addopts so that running one test file does not fail for covering one module.
+
+- `.github/workflows/ci.yml` *(modified)*
+- `pynn/core/tensor.py` *(modified)*
+- `pynn/utils/data.py` *(modified)*
+- `pyproject.toml` *(modified)*
+- `tests/core/tensor_test.py` *(modified)*
+- `tests/functional/initializers_test.py` *(added)*
+- `tests/nn/activations_test.py` *(added)*
+- `tests/nn/factories_test.py` *(added)*
+- `tests/nn/losses_test.py` *(added)*
+- `tests/nn/modules_test.py` *(modified)*
+- `tests/optim/optimizers_test.py` *(modified)*
+- `tests/test_gradcheck.py` *(modified)*
+- `tests/test_verify.py` *(modified)*
+- `tests/utils/array_test.py` *(modified)*
+- `tests/utils/data_test.py` *(added)*
+
+### `aef4fc8` — make Sequential a nestable Module with a recursive parameter tree
+
+*2026-08-05* · 21 files changed, 962 insertions(+), 102 deletions(-)
+
+> Sequential subclassed a separate Model type whose parameters was a list[dict] while Module.parameters was a dict, so nesting one container inside another type-checked, ran the forward pass, and then failed inside the optimizer.
+
+- `README.md` *(modified)*
+- `examples/binary_classification.py` *(modified)*
+- `examples/mnist.py` *(modified)*
+- `examples/regression.py` *(modified)*
+- `pynn/__init__.py` *(modified)*
+- `pynn/core/__init__.py` *(modified)*
+- `pynn/core/model.py` *(deleted)*
+- `pynn/core/module.py` *(modified)*
+- `pynn/core/optimizer.py` *(modified)*
+- `pynn/nn/__init__.py` *(modified)*
+- `pynn/nn/models.py` *(modified)*
+- `pynn/optim/adadelta.py` *(modified)*
+- `pynn/optim/adagrad.py` *(modified)*
+- `pynn/optim/adam.py` *(modified)*
+- `pynn/optim/rmsprop.py` *(modified)*
+- `pynn/optim/sgd.py` *(modified)*
+- `pynn/verify/__init__.py` *(modified)*
+- `pynn/verify/invariants.py` *(modified)*
+- `scripts/smoke_test.py` *(modified)*
+- `tests/core/module_test.py` *(added)*
+- `tests/optim/optimizers_test.py` *(modified)*
+
+### `74db7ee` — add no_grad, detach, requires_grad, and dtype preservation
+
+*2026-08-05* · 7 files changed, 604 insertions(+), 8 deletions(-)
+
+> Inference built a full graph and threw it away. Worse, each reverse closure captures the forward pass's intermediate arrays, so a validation loop that collects predictions retained every batch's graph. add_children and the reverse setter are the two gates that turn recording off, so no operation has to check the mode itself.
+
+- `pynn/__init__.py` *(modified)*
+- `pynn/core/__init__.py` *(modified)*
+- `pynn/core/grad_mode.py` *(added)*
+- `pynn/core/tensor.py` *(modified)*
+- `pynn/verify/invariants.py` *(modified)*
+- `tests/core/grad_mode_test.py` *(added)*
+- `tests/core/tensor_test.py` *(modified)*
+
+### `80dcd54` — add Dropout, LayerNorm, BatchNorm, and 2D pooling
+
+*2026-08-05* · 12 files changed, 1543 insertions(+), 75 deletions(-)
+
+> Each layer is a functional op with a hand-written reverse plus an nn Module with a lazy build, and each is on the verify gradcheck sweep in both its plain and reused-input forms — 151 checks now, up from 132.
+
+- `README.md` *(modified)*
+- `pynn/core/module.py` *(modified)*
+- `pynn/core/random.py` *(added)*
+- `pynn/functional/initializers.py` *(modified)*
+- `pynn/functional/modules.py` *(modified)*
+- `pynn/nn/__init__.py` *(modified)*
+- `pynn/nn/modules.py` *(modified)*
+- `pynn/utils/array.py` *(modified)*
+- `pynn/verify/gradients.py` *(modified)*
+- `pynn/verify/invariants.py` *(modified)*
+- `tests/nn/layers_test.py` *(added)*
+- `tests/test_gradcheck.py` *(modified)*
+
+### `31529f9` — fix fan-in for convolution kernels in the variance-scaling initializers
+
+*2026-08-05* · 3 files changed, 168 insertions(+), 6 deletions(-)
+
+> he_normal and friends computed the fan-in as shape[0], which is fan-in only for a 2-D (in, out) weight matrix. A Conv2d kernel is (out_channels, in_channels, kh, kw), so that read the output channel count and dropped the receptive field: Conv2d(16, 32, 3) came out at std 0.25 where it should be 0.118.
+
+- `pynn/functional/initializers.py` *(modified)*
+- `pynn/verify/invariants.py` *(modified)*
+- `tests/functional/initializers_test.py` *(modified)*
+
+### `3e5dadc` — add DESIGN.md and a PyTorch CPU benchmark
+
+*2026-08-05* · 5 files changed, 831 insertions(+), 2 deletions(-)
+
+> DESIGN.md is the document that answers "what were the hard parts": the tape as closures, why gradients accumulate, the iterative topological sort, unbroadcast, why the losses are fused, the module tree and why Sequential had to become one, the two gates no_grad works through, im2col, and what was left out on purpose.
+
+- `.github/workflows/ci.yml` *(modified)*
+- `benchmarks/__init__.py` *(added)*
+- `benchmarks/benchmark.py` *(added)*
+- `docs/DESIGN.md` *(added)*
+- `pyproject.toml` *(modified)*
+
+### `6f7336d` — add an executed MNIST notebook, README badges, and a benchmark table
+
+*2026-08-05* · 3 files changed, 1381 insertions(+), 19 deletions(-)
+
+> The notebook is committed with its outputs so it renders on GitHub: training curves, a confusion matrix with the digits it actually confuses, the misclassified examples, the first-layer weights as 28x28 images, then the same data through a CNN with its learned kernels and feature maps, and a checkpoint round trip. 98.1% test accuracy from the MLP, 97.2% from a CNN with 13x fewer parameters.
+
+- `PROJECT_REVIEW.md` *(modified)*
+- `README.md` *(modified)*
+- `examples/mnist.ipynb` *(added)*
+
+---
+
+## Files by number of commits
+
+The files that changed most often are the ones whose design moved most. Reading a
+file's history top to bottom (`git log -p -- <path>`) is the fastest way to see why it
+looks the way it does.
+
+| Commits | File |
+|---:|---|
+| 10 | `README.md` |
+| 10 | `pynn/core/tensor.py` |
+| 7 | `pynn/functional/modules.py` |
+| 6 | `pynn/core/__init__.py` |
+| 6 | `pynn/core/module.py` |
+| 6 | `pynn/functional/activations.py` |
+| 6 | `pynn/verify/invariants.py` |
+| 6 | `pyproject.toml` |
+| 5 | `pynn/__init__.py` |
+| 5 | `pynn/core/optimizer.py` |
+| 5 | `pynn/core/utils.py` |
+| 5 | `pynn/nn/__init__.py` |
+| 5 | `pynn/nn/activations.py` |
+| 5 | `pynn/nn/losses.py` |
+| 5 | `pynn/nn/modules.py` |
+| 5 | `pynn/optim/adadelta.py` |
+| 5 | `pynn/optim/adagrad.py` |
+| 5 | `pynn/optim/adam.py` |
+| 5 | `pynn/optim/rmsprop.py` |
+| 5 | `pynn/optim/sgd.py` |
+| 5 | `tests/core/tensor_test.py` |
+| 5 | `tests/optim/optimizers_test.py` |
+| 5 | `tests/test_gradcheck.py` |
+| 4 | `examples/mnist.py` |
+| 4 | `pynn/core/primitives.py` |
+| 4 | `pynn/core/types.py` |
+| 4 | `pynn/functional/initializers.py` |
+| 4 | `pynn/functional/losses.py` |
+| 4 | `pynn/nn/factories.py` |
+| 4 | `pynn/verify/gradients.py` |
+| 4 | `tests/core/math_test.py` |
+| 3 | `.github/workflows/ci.yml` |
+| 3 | `examples/binary_classification.py` |
+| 3 | `examples/regression.py` |
+| 3 | `pynn/core/activation.py` |
+| 3 | `pynn/core/initializer.py` |
+| 3 | `pynn/core/loss.py` |
+| 3 | `pynn/core/math.py` |
+| 3 | `pynn/core/model.py` *(gone)* |
+| 3 | `pynn/nn/initializers.py` |
+| 3 | `pynn/nn/models.py` |
+| 3 | `pynn/utils/array.py` |
+| 3 | `pynn/utils/data.py` |
+| 3 | `pynn/verify/__init__.py` |
+| 3 | `scripts/smoke_test.py` |
+| 3 | `tests/core/utils_test.py` |
+| 3 | `tests/functional/losses_test.py` |
+| 3 | `tests/test_verify.py` |
+
+---
+
+## Suggested reading order for the current state
+
+Not chronological — this is the order that makes the code make sense, and it mirrors
+the table at the end of [`docs/DESIGN.md`](docs/DESIGN.md).
+
+1. **`pynn/core/tensor.py`** — the tape: `add_children`, the `reverse` property, `backward`, the iterative topological sort
+1. **`pynn/core/utils.py`** — `unbroadcast` and `matrix_multiply_gradients` — the backward pass's shape plumbing
+1. **`pynn/functional/activations.py`** — the closure pattern, nine times over
+1. **`pynn/functional/losses.py`** — why softmax and cross-entropy are fused
+1. **`pynn/core/module.py`** — the module tree and every recursive walk over it
+1. **`pynn/nn/models.py`** — `Sequential` as a `Module`, which is what lets containers nest
+1. **`pynn/core/optimizer.py`** — how parameter groups reach an optimizer, and why they stay live
+1. **`pynn/functional/modules.py`** — `conv2d`, the normalization layers, pooling
+1. **`pynn/utils/array.py`** — `im2col` / `col2im`
+1. **`pynn/core/grad_mode.py`** — the two gates that turn recording off
+1. **`pynn/verify/gradients.py`** — what is checked, and the shapes the checks take
+
