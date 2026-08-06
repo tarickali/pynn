@@ -354,3 +354,4 @@ second one would upload the same report twice.
 | MNIST data | `python scripts/download_mnist.py` |
 | Notebook | `jupyter lab examples/mnist.ipynb` |
 | Full install | `pip install -r requirements/all.txt` |
+| Refresh READ_FILES.md | `python scripts/generate_read_files.py` |
