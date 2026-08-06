@@ -34,8 +34,8 @@ jobs:
 
       - name: Ruff
         run: |
-          ruff check pynn tests examples scripts
-          ruff format --check pynn tests examples scripts
+          ruff check pynn tests examples scripts benchmarks
+          ruff format --check pynn tests examples scripts benchmarks
 
       - name: Mypy
         run: mypy
