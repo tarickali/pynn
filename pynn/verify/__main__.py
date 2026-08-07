@@ -25,7 +25,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "suites",
         nargs="*",
-        choices=sorted(SUITES),
+        # Deliberately no `choices=`: combined with `nargs="*"`, argparse validates the
+        # empty default against the choice list on Python 3.10 and 3.11, so running
+        # this with no arguments at all — the common case — exits 2 with
+        # "invalid choice: []". Fixed in 3.12; validated by hand below so that the
+        # command behaves the same on every supported version.
+        metavar="{" + ",".join(sorted(SUITES)) + "}",
         help="Suites to run. Defaults to all of them.",
     )
     parser.add_argument(
@@ -35,6 +40,12 @@ def main(argv: list[str] | None = None) -> int:
         help="List every check, not just the failures.",
     )
     args = parser.parse_args(argv)
+
+    unknown = [name for name in args.suites if name not in SUITES]
+    if unknown:
+        parser.error(
+            f"unknown suite {unknown[0]!r} (choose from {', '.join(sorted(SUITES))})"
+        )
 
     selected = args.suites or sorted(SUITES)
     overall = CheckReport(name="pynn.verify")

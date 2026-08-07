@@ -27,7 +27,9 @@ def linear(X: Tensor, W: Tensor, b: Tensor | None) -> Tensor:
 def flatten(x: Tensor) -> Tensor:
     x = x if isinstance(x, Tensor) else Tensor(x)
     array = x.data
-    data = array.reshape(-1, np.prod(array.shape[1:]))
+    # int(), because np.prod returns a NumPy scalar and reshape wants a plain index —
+    # for an empty trailing shape it returns 1.0, a float, which reshape rejects.
+    data = array.reshape(-1, int(np.prod(array.shape[1:])))
     output = Tensor(data)
     output.add_children((x,))
 

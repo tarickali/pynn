@@ -77,8 +77,8 @@ def constant(shape: Shape, value: Number) -> Tensor:
 
 def random_uniform(
     shape: Shape,
-    low: Number = 0.0,
-    high: Number = 1.0,
+    low: float = 0.0,
+    high: float = 1.0,
     rng: np.random.Generator | None = None,
 ) -> Tensor:
     return Tensor(default_rng(rng).uniform(low, high, shape))
@@ -86,8 +86,8 @@ def random_uniform(
 
 def random_normal(
     shape: Shape,
-    mean: Number = 0.0,
-    std: Number = 1.0,
+    mean: float = 0.0,
+    std: float = 1.0,
     rng: np.random.Generator | None = None,
 ) -> Tensor:
     return Tensor(default_rng(rng).normal(mean, std, shape))

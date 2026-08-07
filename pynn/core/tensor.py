@@ -331,13 +331,17 @@ class Tensor:
 
         return output
 
-    def __radd__(self, other: Tensor | TensorLike) -> Tensor:
+    # NumPy's scalar stubs declare the arithmetic dunders as attributes rather than
+    # methods in some versions, and mypy's reverse-operator check reports the forward
+    # operator as "not callable" when it sees one. The runtime behaviour is checked in
+    # tests/core/tensor_test.py.
+    def __radd__(self, other: Tensor | TensorLike) -> Tensor:  # type: ignore[misc]
         return self + other
 
     def __rsub__(self, other: Tensor | TensorLike) -> Tensor:
         return -self + other
 
-    def __rmul__(self, other: Tensor | TensorLike) -> Tensor:
+    def __rmul__(self, other: Tensor | TensorLike) -> Tensor:  # type: ignore[misc]
         return self * other
 
     def __rtruediv__(self, other: Tensor | TensorLike) -> Tensor:

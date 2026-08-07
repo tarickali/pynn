@@ -108,3 +108,16 @@ def test_main_verbose_lists_individual_checks(capsys) -> None:
 def test_main_rejects_an_unknown_suite() -> None:
     with pytest.raises(SystemExit):
         main(["not-a-suite"])
+
+
+def test_main_with_no_arguments_runs_every_suite(capsys) -> None:
+    """`python -m pynn.verify` with no arguments is what CI runs and what the README
+    documents, and it is the one invocation `nargs="*"` combined with `choices=` got
+    wrong: argparse validated the empty default against the choice list and exited 2
+    with "invalid choice: []" on Python 3.10 and 3.11.
+    """
+    assert main([]) == 0
+
+    output = capsys.readouterr().out
+    for suite in ("gradients", "stability", "invariants"):
+        assert f"{suite}:" in output

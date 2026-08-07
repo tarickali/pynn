@@ -101,9 +101,19 @@ ignore = [
 ]
 
 [tool.mypy]
-python_version = "3.10"
+# No `python_version` on purpose: it would pin the *analysis* target while the stubs
+# on disk belong to whatever NumPy the running interpreter installed. Pinning 3.10
+# against a modern numpy is a hard failure — its `__init__.pyi` uses PEP 695 `type`
+# statements, which mypy refuses to parse when told to assume 3.10, and it aborts
+# before checking anything (exit 2).
+#
+# Leaving it unset means each CI job checks against its own interpreter, which covers
+# 3.10 through 3.14 across the matrix rather than checking 3.10 five times.
 files = ["pynn"]
-warn_unused_ignores = true
+# Off because the CI matrix type-checks against five interpreters, each with the NumPy
+# that supports it. An ignore that a given stub version genuinely needs is unused
+# against the others, so leaving this on turns "works everywhere" into an error.
+warn_unused_ignores = false
 warn_redundant_casts = true
 warn_unreachable = true
 no_implicit_optional = true
