@@ -21,10 +21,15 @@ jobs:
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
 
     steps:
-      - uses: actions/checkout@v4
+      # These majors are the first that run on Node 24. GitHub deprecated the Node 20
+      # runtime in September 2025 and now forces those actions onto Node 24 anyway,
+      # with a warning on every job; the earlier majors are living on borrowed time.
+      # Newer majors exist (checkout v7, setup-python v7) — moving up is a separate
+      # decision from silencing the deprecation.
+      - uses: actions/checkout@v5
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
@@ -54,7 +59,10 @@ jobs:
         # placed after `Verify` would be skipped whenever anything upstream failed.
         # One version only, since every job produces the same report.
         if: ${{ !cancelled() && matrix.python-version == '3.12' }}
-        uses: codecov/codecov-action@v5
+        # v6 is where Node 24 support landed. v5 bundles a Node 20 build of
+        # actions/github-script, which is why only the job that uploads coverage
+        # reported a third deprecated action.
+        uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage.xml
