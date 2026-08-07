@@ -753,8 +753,10 @@ Steps 8–15 of the plan in Part 3, plus the structural work in Part 2 that they
 | | After Tier 1 | Now |
 |---|---|---|
 | Line coverage | 84% | **98.6%**, with a 95% floor enforced in CI |
-| `pytest -m "not external"` | 175 passed | **541 passed** |
-| `python -m pynn.verify` | 187 checks | **252 checks** |
+| CI | none | green on Python 3.10–3.14, reproducible locally |
+| A plain list of layers on a Module | silently never trained | `TypeError` naming `ModuleList` |
+| `pytest -m "not external"` | 175 passed | **571 passed** |
+| `python -m pynn.verify` | 187 checks | **257 checks** |
 | Gradient-checked operations | 111 | **151** |
 | `Sequential([Sequential([...]), ...])` | `AttributeError` in `update()` | trains |
 | Evaluating a model | builds a full graph and discards it | `no_grad()` records nothing |
@@ -833,6 +835,47 @@ the first loss was 15.2 instead of ln(10) ≈ 2.3, and the network collapsed int
 a constant at a learning rate a correctly initialized one handles. `fans()` now branches on
 rank, since a `Linear` weight is `(in, out)` and a `Conv2d` kernel is `(out, in, kh, kw)`.
 
+### Containers, and the last hole in the module tree
+
+Auto-registration keys on `isinstance(value, Module)`, which left one hole: a plain list.
+`self.blocks = [Linear(64), Linear(64)]` is not a Module, so nothing registered it — the
+layers ran in the forward pass and received gradients, but were absent from
+`named_parameters`, so no optimizer stepped them and no checkpoint saved them. The model
+trained, the loss fell, and those layers stayed at their initial weights.
+
+`ModuleList` and `ModuleDict` register their contents. Neither has a `forward`: they hold
+modules whose wiring the enclosing module decides, and `Sequential` already covers "apply
+these in order". Beyond that, `Module.__setattr__` now **refuses** a plain list, tuple, or
+dict containing a Module and names the wrapper to use, so the mistake is a `TypeError`
+where it is written rather than a model that never trains part of itself.
+
+### CI, which had never actually run
+
+The workflow was added in an earlier pass and no commit had been pushed since, so its
+first run failed on all five versions at once — three separate faults, none of which
+reproduce on the 3.14 the project is developed on:
+
+- **mypy exited 2 on 3.11 and up.** `python_version = "3.10"` pinned the analysis target
+  while the stubs on disk belonged to whatever NumPy the interpreter installed. Modern
+  NumPy's `__init__.pyi` uses PEP 695 `type` statements, which mypy refuses to parse when
+  told to assume 3.10; it aborted before checking anything.
+- **`python -m pynn.verify` exited 2 on 3.10 and 3.11** — the exact command CI and the
+  README use. `nargs="*"` combined with `choices=` makes argparse validate the empty
+  default against the choice list, so it rejected `[]` as an invalid choice. Fixed in
+  CPython 3.12; now validated by hand so the command behaves the same everywhere.
+- **NumPy 2.5's stricter stubs surfaced two real annotation faults** that 2.4 does not:
+  `np.prod` feeding `reshape` without an `int()`, and `np.number` reaching `Generator`
+  methods that take a float.
+
+Two smaller things came out of the same pass. The coverage upload was the last step, so
+any earlier failure skipped it — a red run is exactly when the coverage delta is worth
+seeing — and `relative_files` was off, so the report named an absolute path from the
+machine that produced it.
+
+The lesson is in `scripts/ci_matrix.sh`: every failure above was invisible on the newest
+interpreter, and the loop for discovering that was a push and a wait. It runs every CI
+step against every supported Python in a throwaway virtualenv per version.
+
 ### Presentation
 
 - `docs/DESIGN.md` — the tape, the topological sort, `unbroadcast`, why the losses are fused, the
@@ -850,25 +893,35 @@ rank, since a `Linear` weight is `(in, out)` and a `Conv2d` kernel is `(out, in,
 
 Nothing here is a correctness bug. In rough order of value:
 
-1. **`ModuleList` / `ModuleDict`.** A list of modules assigned to an attribute is not registered —
-   the one real gap left in the module tree.
-2. **Differentiable indexing, `concat`, `stack`, `split`.** `Tensor.__getitem__` returns a raw
-   NumPy array and drops the graph. Needed before attention or `Embedding`.
-3. **`Embedding` and a recurrent cell.** Backprop-through-time is the most interview-relevant thing
-   missing; the iterative topological sort already exists to support it.
-4. **More losses and optimizers.** `AdamW`, learning-rate schedulers, gradient clipping,
-   `HuberLoss`, `BCEWithLogitsLoss` as a distinct class, sparse/integer-label cross-entropy, a
-   uniform `reduction` argument.
-5. **More activations.** `GELU`, `SiLU`, `LogSoftmax`, `PReLU` (a learnable activation, which is a
-   good test that `Activation` and `Module` compose).
-6. **`CONTRIBUTING.md`** with a "how to add a layer" walkthrough, `CHANGELOG.md`, a tagged
-   `v0.1.0`.
-7. **Packaging polish.** `py.typed`, `__version__` in `pynn/__init__.py`, deleting the redundant
-   `requirements*.txt`, TestPyPI.
-8. **`.pre-commit-config.yaml`.**
-9. **A graph visualizer** (`Tensor.to_dot()`), and Hypothesis property tests over `unbroadcast`.
-10. **Numba removal.** Step 8 of Part 3 was never carried out. `pynn/core/primitives.py` still
-    decorates every elementwise primitive with `@njit` (a no-op fallback when Numba is absent),
-    `requirements*.txt` still list it, and the measurements in 1.8 still stand: 1.9x slower than
-    plain NumPy on a 2000x2000 add, and a test suite that goes from 1.7s to 12.1s with it
-    installed.
+1. **Differentiable indexing, `concat`, `stack`, `split`.** `Tensor.__getitem__` returns a raw
+   NumPy array and drops the graph, which is the blocker for everything below it: `Embedding`
+   needs a differentiable gather, attention needs `concat`, and a recurrent cell needs to slice a
+   sequence. This is the structural item now, the way `Sequential` was before it.
+2. **`Embedding` and a recurrent cell.** Backprop-through-time is the most interview-relevant
+   thing missing, and the iterative topological sort exists precisely so an unrolled recurrence
+   does not blow the stack — it has just never been exercised. Depends on item 1.
+3. **More losses and optimizers.** `AdamW` (decoupled weight decay, a nice contrast with Adam's
+   L2), learning-rate schedulers, `clip_grad_norm`, `HuberLoss`, `BCEWithLogitsLoss` as a distinct
+   class, sparse integer-label cross-entropy, and a uniform `reduction` argument. Each is small
+   and independent, so this is the item to pick up when time is short.
+4. **More activations.** `GELU` (exact and tanh), `SiLU`, `LogSoftmax`, and `PReLU` — a
+   *learnable* activation, which is the one that tests whether `Activation` and `Module` actually
+   compose.
+5. **Numba removal.** Step 8 of Part 3 was never carried out. `pynn/core/primitives.py` still
+   decorates every elementwise primitive with `@njit` (a no-op fallback when Numba is absent),
+   and the measurements in 1.8 still stand: 1.9x slower than plain NumPy on a 2000x2000 add, and
+   a test suite that goes from 1.7s to 12.1s with it installed. Deleting a dependency that costs
+   performance is a stronger signal than keeping it because it sounds fast.
+6. **`CONTRIBUTING.md`** with a "how to add a layer" walkthrough — subclass `Module`, implement
+   `forward`/`build`/`hyperparameters`, add the functional op with its `reverse`, add a gradcheck
+   entry. Plus `CHANGELOG.md` and a tagged `v0.1.0`.
+7. **Packaging polish.** `py.typed` so the type hints are visible to consumers, `__version__` in
+   `pynn/__init__.py`, and TestPyPI — being able to say `pip install` works is a differentiator,
+   and publishing forces the packaging to stay honest.
+8. **A graph visualizer** (`Tensor.to_dot()`). Cheap to write, and a computation-graph diagram in
+   the README is the most effective way to show a reader the tape is real.
+9. **`.pre-commit-config.yaml`**, and Hypothesis property tests over `unbroadcast` — that function
+   is fiddly enough to deserve generated shapes rather than a hand-written list.
+10. **Pinned tool versions.** `ruff>=0.6` and `mypy>=1.11` let CI install anything newer than the
+    local versions, and a newer `ruff format` can reformat code that is clean here. Worth pinning
+    once the churn becomes annoying; the matrix script makes it cheap to find out.

@@ -222,6 +222,44 @@ Without it, `Block`'s layers would run in the forward pass, receive gradients, a
 be handed to an optimizer — a model that trains its last layer and nothing else, with no
 error anywhere.
 
+### Containers, and the assignment that used to fail quietly
+
+Auto-registration keys on `isinstance(value, Module)`, which leaves one hole: a plain
+list.
+
+```python
+self.blocks = [Linear(64), Linear(64)]     # not a Module — not registered
+```
+
+Those layers run in the forward pass and receive gradients. They are simply absent from
+`named_parameters`, so no optimizer ever steps them and no checkpoint ever saves them.
+The model trains, the loss falls — the layers that *are* registered take up the slack —
+and the ones in the list sit at their initial weights forever. PyTorch has the same hole
+and answers it with `ModuleList`; a user who forgets gets no warning.
+
+`ModuleList` and `ModuleDict` are the containers. They register their contents, so
+everything recursive reaches them:
+
+```python
+self.blocks = ModuleList(Linear(64, activation="relu") for _ in range(depth))
+# -> blocks.0.W, blocks.0.b, blocks.1.W, ...
+```
+
+Neither has a `forward`: the point is to hold modules whose wiring the enclosing module
+decides, and `Sequential` already covers "apply these in order". Calling one raises
+rather than guessing.
+
+The second half is the part PyTorch does not do. `Module.__setattr__` **refuses** a
+plain list, tuple, or dict that contains a `Module`, naming the wrapper to use. An
+assignment that would have silently cost you a layer is now a `TypeError` at the moment
+you write it. That trade — a false positive is a one-line fix, a false negative is a
+model that never trains a third of itself — is the same one the rest of this library
+makes everywhere.
+
+Indices in a `ModuleList` are positions, so inserting renumbers the paths after it and
+a checkpoint taken before the insert will not load after one. `ModuleDict` keys become
+path segments, so a key containing `.` is refused for the same reason.
+
 ### Why `Sequential` had to become a `Module`
 
 `Sequential` used to subclass a separate `Model` base whose `parameters` was a
@@ -461,10 +499,6 @@ reproducible. It is a `numpy.random.Generator`, not the legacy global `numpy.ran
 which cannot be seeded independently of anything else in the process.
 
 ## 14. What was left out, and why
-
-**A `ModuleList` / `ModuleDict`.** Attribute assignment covers the common case and
-`Sequential` covers ordered stacks. A list of modules assigned to an attribute is *not*
-registered — a real gap, and the next thing to add.
 
 **Differentiable indexing, `concat`, `stack`, `split`.** `Tensor.__getitem__` returns a
 raw NumPy array and drops the graph. Everything currently shipped works on whole tensors,

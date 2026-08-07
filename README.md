@@ -16,8 +16,8 @@ tape are written up in [`docs/DESIGN.md`](docs/DESIGN.md).
 ## Features
 
 - **Automatic differentiation** — Define-by-run style: build a computation graph as you run the forward pass; gradients are computed via reverse-mode differentiation.
-- **Layers** — `Linear`, `Conv2d`, `MaxPool2d`, `AvgPool2d`, `Dropout`, `LayerNorm`, `BatchNorm1d`/`BatchNorm2d`, `Flatten`, and a generic `Activation` wrapper. `Sequential` is itself a `Module`, so containers nest.
-- **Module tree** — recursive `named_parameters()`, `state_dict()`/`load_state_dict()`, `save`/`load`, `train()`/`eval()` mode propagation, and `freeze()`/`unfreeze()` that the optimizers honor.
+- **Layers** — `Linear`, `Conv2d`, `MaxPool2d`, `AvgPool2d`, `Dropout`, `LayerNorm`, `BatchNorm1d`/`BatchNorm2d`, `Flatten`, and a generic `Activation` wrapper. `Sequential` is itself a `Module`, so containers nest; `ModuleList` and `ModuleDict` hold layers whose wiring you decide.
+- **Module tree** — recursive `named_parameters()`, `state_dict()`/`load_state_dict()`, `save`/`load`, `train()`/`eval()` mode propagation, and `freeze()`/`unfreeze()` that the optimizers honor. Assigning a plain list of layers to an attribute raises rather than silently leaving them untrained.
 - **Autodiff controls** — `no_grad()` for inference that builds no graph, `Tensor.detach()`, and `requires_grad` tracking.
 - **Activations** — Identity, ReLU (and LeakyReLU), Sigmoid, Tanh, Softmax (with configurable axis), ELU, SELU, SoftPlus, Affine.
 - **Losses** — Binary and categorical cross-entropy (logits or probabilities), mean squared error, mean absolute error; MSE supports `reduction='mean'` or `'sum'`.
@@ -93,7 +93,7 @@ optimizer.update()
 | **`pynn.core.math`** | `abs`, `sum`, `mean`, `exp`, `log` (import as a module — these shadow builtins). |
 | **`pynn.core.utils`** | `unbroadcast`, `matrix_multiply_gradients` (backward-pass shape plumbing). |
 | **`pynn.core.numeric`** | `stable_sigmoid` (overflow-free kernel shared by the activations and losses). |
-| **`pynn.nn`** | Layers: `Linear`, `Conv2d`, `MaxPool2d`, `AvgPool2d`, `Dropout`, `LayerNorm`, `BatchNorm1d`, `BatchNorm2d`, `Flatten`, `Activation`, `Sequential`. Activations: `ReLU`, `Sigmoid`, `Tanh`, `Softmax`, `ELU`, `SELU`, `SoftPlus`, `Identity`, `Affine`. Losses: `BinaryCrossentropy`, `CategoricalCrossentropy`, `MeanSquaredError`, `MeanAbsoluteError` (aliases: `BCELoss`, `CrossEntropyLoss`, `MSELoss`, `L1Loss`). |
+| **`pynn.nn`** | Layers: `Linear`, `Conv2d`, `MaxPool2d`, `AvgPool2d`, `Dropout`, `LayerNorm`, `BatchNorm1d`, `BatchNorm2d`, `Flatten`, `Activation`. Containers: `Sequential`, `ModuleList`, `ModuleDict`. Activations: `ReLU`, `Sigmoid`, `Tanh`, `Softmax`, `ELU`, `SELU`, `SoftPlus`, `Identity`, `Affine`. Losses: `BinaryCrossentropy`, `CategoricalCrossentropy`, `MeanSquaredError`, `MeanAbsoluteError` (aliases: `BCELoss`, `CrossEntropyLoss`, `MSELoss`, `L1Loss`). |
 | **`pynn.nn.factories`** | `activation_factory`, `initializer_factory`. |
 | **`pynn.functional`** | Activation functions (`relu`, `sigmoid`, `softmax`, ...). Losses and module functions live in `pynn.functional.losses` and `pynn.functional.modules`. |
 | **`pynn.optim`** | `SGD`, `Adam`, `RMSprop`, `Adagrad`, `Adadelta`. |
@@ -228,10 +228,10 @@ python -m pynn.verify stability    # one suite
 
 ```
 gradients: 151/151 passed (OK)
-invariants: 81/81 passed (OK)
+invariants: 86/86 passed (OK)
 stability: 20/20 passed (OK)
 
-pynn.verify: 252/252 passed (OK)
+pynn.verify: 257/257 passed (OK)
 ```
 
 Three suites:

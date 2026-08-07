@@ -13,6 +13,34 @@ from pynn.core.types import Array, Shape
 __all__ = ["Module"]
 
 
+def _reject_plain_container(name: str, value: Any) -> None:
+    """Refuse a plain list, tuple, or dict that holds Modules.
+
+    Only a `Module` is registered on assignment, so a plain container of them is
+    invisible to the tree: its layers run in the forward pass, receive gradients, and
+    are never handed to an optimizer. Nothing raises, and the model trains everything
+    except those layers, which sit at their initial weights.
+
+    That is the exact failure `ModuleList` and `ModuleDict` exist to prevent, so the
+    assignment is refused rather than silently accepted.
+    """
+    if isinstance(value, list | tuple):
+        holds_modules = any(isinstance(item, Module) for item in value)
+        wrapper = "ModuleList"
+    elif isinstance(value, dict):
+        holds_modules = any(isinstance(item, Module) for item in value.values())
+        wrapper = "ModuleDict"
+    else:
+        return
+
+    if holds_modules:
+        raise TypeError(
+            f"cannot assign a plain {type(value).__name__} of Modules to {name!r}: it "
+            "would not be registered, so those modules would receive gradients but "
+            f"never be updated by an optimizer. Wrap it in pynn.nn.{wrapper}."
+        )
+
+
 class Module(ABC):
     """Base class for every layer and container.
 
@@ -78,9 +106,11 @@ class Module(ABC):
                     f"{type(self).__name__}.__init__() calls super().__init__()"
                 )
             modules[name] = value
-        elif name in self.__dict__.get("_modules", {}):
-            # Overwriting a child with a non-module takes it out of the tree.
-            del self._modules[name]
+        else:
+            _reject_plain_container(name, value)
+            if name in self.__dict__.get("_modules", {}):
+                # Overwriting a child with a non-module takes it out of the tree.
+                del self._modules[name]
         object.__setattr__(self, name, value)
 
     def register_module(self, name: str, module: Module) -> Module:

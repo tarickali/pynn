@@ -10,6 +10,7 @@ from pynn.nn.activations import (
     SoftPlus,
     Tanh,
 )
+from pynn.nn.containers import ModuleDict, ModuleList
 from pynn.nn.losses import (
     BinaryCrossentropy,
     CategoricalCrossentropy,
@@ -65,6 +66,8 @@ __all__ = [
     "MeanSquaredError",
     # Core
     "Module",
+    "ModuleDict",
+    "ModuleList",
     "ReLU",
     "Sequential",
     "Sigmoid",

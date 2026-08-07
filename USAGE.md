@@ -62,7 +62,7 @@ pip install -e ".[numba]"      # not recommended; see below
 
 ```bash
 python -c "import pynn; print(pynn.__file__)"   # works from any directory
-python -m pynn.verify                           # 252/252 passed (OK)
+python -m pynn.verify                           # 257/257 passed (OK)
 ```
 
 `requirements-dev.txt` installs the library in editable mode, so `pynn` imports from
@@ -79,7 +79,7 @@ pytest --cov=pynn                   # + coverage, enforces the 95% floor
 pytest --cov=pynn --cov-report=term-missing   # + which lines are uncovered
 ```
 
-**Expected:** `541 passed, 1 skipped, 6 deselected` · `Total coverage: 98.66%`
+**Expected:** `571 passed, 1 skipped, 6 deselected` · `Total coverage: 98.57%`
 
 Narrower runs:
 
@@ -87,6 +87,7 @@ Narrower runs:
 pytest tests/test_gradcheck.py      # the 151 gradient checks, one test per operation
 pytest tests/core/module_test.py    # the module tree
 pytest tests/nn/layers_test.py      # Dropout, LayerNorm, BatchNorm, pooling
+pytest tests/nn/containers_test.py  # ModuleList and ModuleDict
 pytest -k "batch_norm"              # anything matching a name
 pytest -x -q                        # stop at the first failure
 ```
@@ -113,10 +114,10 @@ python -m pynn.verify stability invariants  # several
 
 ```
 gradients: 151/151 passed (OK)
-invariants: 81/81 passed (OK)
+invariants: 86/86 passed (OK)
 stability: 20/20 passed (OK)
 
-pynn.verify: 252/252 passed (OK)
+pynn.verify: 257/257 passed (OK)
 ```
 
 Exit code is 0 on success, 1 on any failure, so it works as a CI gate.

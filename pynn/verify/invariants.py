@@ -20,9 +20,9 @@ import numpy as np
 
 import pynn.core.math as pmath
 import pynn.functional as F
-from pynn.core import Tensor, is_grad_enabled, no_grad
+from pynn.core import Module, Tensor, is_grad_enabled, no_grad
 from pynn.functional.initializers import fans, he_normal
-from pynn.nn import BatchNorm1d, Dropout, Linear, Sequential
+from pynn.nn import BatchNorm1d, Dropout, Linear, ModuleDict, ModuleList, Sequential
 from pynn.nn.factories import activation_factory, initializer_factory
 from pynn.nn.losses import MeanSquaredError
 from pynn.optim import SGD, Adadelta, Adagrad, Adam, RMSprop
@@ -608,6 +608,66 @@ def check_modules() -> CheckReport:
         "batch norm does not update its statistics at evaluation",
         bool(np.array_equal(normalized.named_buffers()["running_mean"], running)),
     )
+
+    # A plain list of modules is not registered, so its layers receive gradients and
+    # are never stepped. The container types exist to prevent that, and the assignment
+    # itself is refused so the mistake cannot be made quietly.
+    holder = ModuleList([Linear(4, 3), Linear(3, 2)])
+    report.add(
+        "a ModuleList registers its contents",
+        [name for name, _ in holder.named_children()] == ["0", "1"],
+    )
+
+    class Held(Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.blocks = ModuleList([Linear(4, 4, activation="relu"), Linear(4, 2)])
+
+        def forward(self, inputs: Tensor) -> Tensor:
+            for block in self.blocks:
+                inputs = block(inputs)
+            return inputs
+
+        @property
+        def hyperparameters(self) -> dict[str, object]:
+            return {}
+
+    held = Held()
+    held(X)
+    report.add(
+        "a ModuleList's parameters reach the enclosing tree",
+        sorted(held.named_parameters())
+        == ["blocks.0.W", "blocks.0.b", "blocks.1.W", "blocks.1.b"],
+        f"{sorted(held.named_parameters())}",
+    )
+
+    before = held.state_dict()
+    optimizer = SGD(held, learning_rate=0.1)
+    for _ in range(5):
+        loss = MeanSquaredError()(Tensor(np.zeros((5, 2))), held(X))
+        held.zero_grad()
+        loss.backward()
+        optimizer.update()
+    after = held.state_dict()
+    report.add(
+        "every module in a ModuleList is stepped",
+        all(not np.array_equal(before[name], after[name]) for name in before),
+        f"unmoved: {[n for n in before if np.array_equal(before[n], after[n])]}",
+    )
+
+    keyed = ModuleDict({"value": Linear(4, 1), "policy": Linear(4, 3)})
+    report.add(
+        "a ModuleDict registers its contents under its keys",
+        [name for name, _ in keyed.named_children()] == ["value", "policy"],
+    )
+
+    try:
+        held.blocks = [Linear(4, 4)]  # type: ignore[assignment]
+        report.add("a plain list of Modules is refused", False, "no error raised")
+    except TypeError as error:
+        report.add(
+            "a plain list of Modules is refused", "ModuleList" in str(error), str(error)
+        )
 
     # Running statistics are buffers, not parameters: never stepped, always saved.
     report.add(
