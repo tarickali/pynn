@@ -48,7 +48,7 @@ def test_sweep_covers_every_operation() -> None:
     a case does not fail the suite, but deleting a block of them does.
     """
     names = {case.name for case in gradient_cases()}
-    assert len(names) >= 150, f"sweep shrank to {len(names)} cases"
+    assert len(names) >= 165, f"sweep shrank to {len(names)} cases"
 
     for expected in [
         "add",
@@ -62,6 +62,10 @@ def test_sweep_covers_every_operation() -> None:
         "max_pool2d",
         "avg_pool2d",
         "dropout",
+        "gelu",
+        "silu",
+        "log softmax",
+        "prelu",
     ]:
         assert any(expected in name for name in names), f"no {expected!r} case"
 

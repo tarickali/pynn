@@ -47,12 +47,32 @@ def test_an_activation_instance_is_returned_unchanged():
 
 def test_activation_rejects_an_unknown_name():
     with pytest.raises(ValueError, match="not available"):
-        activation_factory("swish")
+        activation_factory("mish")
 
 
 def test_activation_rejects_an_uninterpretable_argument():
     with pytest.raises(ValueError, match="Cannot interpret"):
         activation_factory(3.14)  # type: ignore[arg-type]
+
+
+def test_swish_is_an_alias_for_silu():
+    from pynn.nn.activations import SiLU
+
+    assert isinstance(activation_factory("swish"), SiLU)
+    assert isinstance(activation_factory("silu"), SiLU)
+
+
+def test_a_learnable_activation_comes_back_as_a_module():
+    """PReLU owns a parameter, so the factory has to hand back something the module
+    tree can register — an `Activation` would leave its slope untrainable."""
+    from pynn.core import Module
+    from pynn.nn.activations import PReLU
+
+    activation = activation_factory({"name": "prelu", "params": {"num_parameters": 4}})
+
+    assert isinstance(activation, PReLU)
+    assert isinstance(activation, Module)
+    assert activation.num_parameters() == 4
 
 
 def test_a_factory_built_activation_computes(rng):

@@ -75,6 +75,55 @@ def check_stability() -> CheckReport:
     except FloatingPointError as error:
         report.add("sigmoid does not overflow", False, str(error))
 
+    # --- silu, gelu ------------------------------------------------------- #
+    # Both multiply the input by a gate in [0, 1], so the danger is not the product
+    # but the gate: a naive sigmoid or a naive Gaussian CDF overflows first and turns
+    # the whole thing into nan.
+    for name, activation in [("silu", F.silu), ("gelu", F.gelu)]:
+        try:
+            with _strict():
+                values = activation(Tensor(EXTREME)).data
+            report.add(
+                f"{name} does not overflow",
+                _finite(values),
+                f"{name}(-1000)={values[0]:.1f}, {name}(1000)={values[-1]:.1f}",
+            )
+        except FloatingPointError as error:
+            report.add(f"{name} does not overflow", False, str(error))
+
+    # gelu's exact path goes through erf rather than tanh, so it can fail separately.
+    try:
+        with _strict():
+            values = F.gelu(Tensor(EXTREME), approximate="none").data
+        report.add(
+            "gelu(approximate='none') does not overflow",
+            _finite(values),
+            f"gelu(-1000)={values[0]:.1f}, gelu(1000)={values[-1]:.1f}",
+        )
+    except FloatingPointError as error:
+        report.add("gelu(approximate='none') does not overflow", False, str(error))
+
+    # --- log_softmax ------------------------------------------------------ #
+    # This is the one that matters most: log(softmax(z)) evaluated literally is -inf
+    # for any class the softmax rounds to zero, which is exactly the class a
+    # cross-entropy loss is about to take the log of.
+    try:
+        with _strict():
+            values = F.log_softmax(Tensor(EXTREME.reshape(1, -1))).data
+        # The naive form is *expected* to divide by zero here — that is the whole
+        # comparison — so its warning is silenced rather than promoted.
+        with np.errstate(divide="ignore"):
+            naive = np.log(F.softmax(Tensor(EXTREME.reshape(1, -1))).data)
+        report.add(
+            "log_softmax stays finite where log(softmax(x)) does not",
+            _finite(values) and not _finite(naive),
+            f"log_softmax min={values.min():.1f}, naive min={naive.min()}",
+        )
+    except FloatingPointError as error:
+        report.add(
+            "log_softmax stays finite where log(softmax(x)) does not", False, str(error)
+        )
+
     # --- softplus --------------------------------------------------------- #
     # log(1 + exp(x)) computed naively returns inf for x > ~709. softplus(x) -> x
     # for large x, so the correct answer is simply 800.0.

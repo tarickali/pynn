@@ -1,11 +1,15 @@
 from pynn.core import Module
 from pynn.nn.activations import (
     ELU,
+    GELU,
     SELU,
     Affine,
     Identity,
+    LogSoftmax,
+    PReLU,
     ReLU,
     Sigmoid,
+    SiLU,
     Softmax,
     SoftPlus,
     Tanh,
@@ -39,37 +43,36 @@ L1Loss = MeanAbsoluteError
 
 __all__ = [
     "ELU",
+    "GELU",
     "SELU",
     "Activation",
     "Affine",
     "AvgPool2d",
-    # PyTorch-style loss aliases
     "BCELoss",
     "BatchNorm1d",
     "BatchNorm2d",
-    # Losses
     "BinaryCrossentropy",
     "CategoricalCrossentropy",
     "Conv2d",
     "CrossEntropyLoss",
     "Dropout",
     "Flatten",
-    # Activations
     "Identity",
     "L1Loss",
     "LayerNorm",
-    # Layers / containers
     "Linear",
+    "LogSoftmax",
     "MSELoss",
     "MaxPool2d",
     "MeanAbsoluteError",
     "MeanSquaredError",
-    # Core
     "Module",
     "ModuleDict",
     "ModuleList",
+    "PReLU",
     "ReLU",
     "Sequential",
+    "SiLU",
     "Sigmoid",
     "SoftPlus",
     "Softmax",

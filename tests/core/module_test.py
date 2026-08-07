@@ -506,3 +506,36 @@ def test_a_convolutional_model_round_trips(tmp_path, rng):
     target.load(path)
 
     assert np.allclose(source(X).data, target(X).data)
+
+
+def test_no_shipped_module_shadows_the_module_api():
+    """An attribute that shares a name with a Module method hides it on every instance.
+
+    `PReLU(num_parameters=...)` did exactly this: the keyword matches PyTorch, but
+    storing it under that name turned `layer.num_parameters()` into
+    "int object is not callable" on every PReLU ever constructed. Nothing in the type
+    checker catches it, because the attribute is assigned at runtime.
+    """
+    import inspect
+
+    import pynn.nn as nn
+
+    api = {
+        name
+        for name, value in inspect.getmembers(Module)
+        if callable(value) and not name.startswith("__")
+    }
+
+    offenders = []
+    for name in nn.__all__:
+        candidate = getattr(nn, name)
+        if not (inspect.isclass(candidate) and issubclass(candidate, Module)):
+            continue
+        try:
+            instance = candidate() if candidate is not Linear else Linear(4)
+        except TypeError:
+            continue  # needs arguments; the ones that do are covered elsewhere
+        shadowed = api & set(vars(instance))
+        offenders.extend(f"{name}.{attribute}" for attribute in shadowed)
+
+    assert not offenders, f"attributes shadowing Module methods: {sorted(offenders)}"

@@ -1,13 +1,17 @@
 from typing import Any
 
-from pynn.core import Activation, Initializer
+from pynn.core import Activation, Initializer, Module
 from pynn.nn.activations import (
     ELU,
+    GELU,
     SELU,
     Affine,
     Identity,
+    LogSoftmax,
+    PReLU,
     ReLU,
     Sigmoid,
+    SiLU,
     Softmax,
     SoftPlus,
     Tanh,
@@ -25,6 +29,12 @@ from pynn.nn.initializers import (
     XavierUniform,
     Zeros,
 )
+
+#: What `activation_factory` can return. Almost every activation is a stateless
+#: `Activation`, but `PReLU` learns its slope, so it is a `Module` and has to be in the
+#: module tree to be trained. Both are callable `(Tensor) -> Tensor`, which is all a
+#: layer asks of them.
+ActivationLike = Activation | Module
 
 
 def initializer_factory(
@@ -95,23 +105,23 @@ def initializer_factory(
 
 
 def activation_factory(
-    activation: str | dict[str, Any] | Activation | None = None,
-) -> Activation:
+    activation: str | dict[str, Any] | ActivationLike | None = None,
+) -> ActivationLike:
     """Factory function to create Activation objects.
 
     If activation is None, returns Identity.
 
     Parameters
     ----------
-    activation : str | dict[str, Any] | Activation | None
+    activation : str | dict[str, Any] | ActivationLike | None
         If str, then represents the name of the Activation.
         If dict, then represents the name, param dict of the Activation.
-        If Activation, then returns the same object.
+        If Activation or Module, then returns the same object.
         If None, returns Identity.
 
     Returns
     -------
-    Activation
+    ActivationLike
 
     Raises
     ------
@@ -129,7 +139,7 @@ def activation_factory(
     elif isinstance(activation, dict):
         name = activation["name"]
         params = activation.get("params", {})
-    elif isinstance(activation, Activation):
+    elif isinstance(activation, Activation | Module):
         return activation
     else:
         raise ValueError("Cannot interpret given activation for factory.")
@@ -138,14 +148,22 @@ def activation_factory(
             return Affine(**params)
         case "elu":
             return ELU(**params)
+        case "gelu":
+            return GELU(**params)
         case "identity":
             return Identity()
+        case "log_softmax":
+            return LogSoftmax(axis=params.get("axis", -1))
+        case "prelu":
+            return PReLU(**params)
         case "relu":
             return ReLU(**params)
         case "selu":
             return SELU()
         case "sigmoid":
             return Sigmoid()
+        case "silu" | "swish":
+            return SiLU()
         case "softmax":
             return Softmax(axis=params.get("axis", -1))
         case "softplus":

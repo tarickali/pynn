@@ -524,6 +524,13 @@ def gradient_cases(seed: int = DEFAULT_SEED) -> list[GradientCase]:
         ("softplus", F.softplus, normal),
         ("softmax", F.softmax, normal),
         ("softmax axis=0", lambda x: F.softmax(x, axis=0), normal),
+        ("gelu", F.gelu, normal),
+        # The exact path goes through erf and has a different derivative expression
+        # from the tanh approximation, so it is a separate function to check.
+        ("gelu exact", lambda x: F.gelu(x, approximate="none"), normal),
+        ("silu", F.silu, normal),
+        ("log softmax", F.log_softmax, normal),
+        ("log softmax axis=0", lambda x: F.log_softmax(x, axis=0), normal),
         ("neg", lambda x: -x, normal),
         ("transpose", lambda x: x.T, normal),
         ("pow 3", lambda x: x**3, positive),
@@ -561,6 +568,9 @@ def gradient_cases(seed: int = DEFAULT_SEED) -> list[GradientCase]:
         ("selu", F.selu),
         ("softplus", F.softplus),
         ("softmax", F.softmax),
+        ("silu", F.silu),
+        ("gelu", F.gelu),
+        ("log softmax", F.log_softmax),
     ]:
         scale_cases.append(
             (
@@ -587,6 +597,35 @@ def gradient_cases(seed: int = DEFAULT_SEED) -> list[GradientCase]:
                 [domain(*square), domain(*square), normal(*square), normal(*square)],
             )
         )
+
+    # PReLU learns its slope, so alpha is a second differentiable input rather than a
+    # Python float — the only activation here whose gradient has two destinations.
+    cases += [
+        (
+            "prelu shared slope",
+            lambda ts: pmath.sum(F.prelu(ts[0], ts[1]) * ts[2]),
+            [away_from_zero(4, 4), Tensor(np.array([0.25])), normal(4, 4)],
+        ),
+        (
+            "prelu per-channel slope",
+            lambda ts: pmath.sum(F.prelu(ts[0], ts[1]) * ts[2]),
+            [away_from_zero(3, 4), Tensor(rng.uniform(0.1, 0.5, 4)), normal(3, 4)],
+        ),
+        (
+            "prelu per-channel slope on images",
+            lambda ts: pmath.sum(F.prelu(ts[0], ts[1]) * ts[2]),
+            [
+                away_from_zero(2, 3, 4, 4),
+                Tensor(rng.uniform(0.1, 0.5, 3)),
+                normal(2, 3, 4, 4),
+            ],
+        ),
+        (
+            "prelu with a reused input",
+            lambda ts: pmath.sum(F.prelu(ts[0], ts[1])) + pmath.sum(ts[0] * ts[2]),
+            [away_from_zero(4, 4), Tensor(np.array([0.25])), normal(4, 4)],
+        ),
+    ]
 
     # Losses.
     binary_targets = Tensor(rng.integers(0, 2, (6, 1)).astype(np.float64))

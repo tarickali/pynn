@@ -39,12 +39,17 @@ __all__ = [
 ACTIVATION_NAMES = [
     "affine",
     "elu",
+    "gelu",
     "identity",
+    "log_softmax",
+    "prelu",
     "relu",
     "selu",
     "sigmoid",
+    "silu",
     "softmax",
     "softplus",
+    "swish",
     "tanh",
 ]
 
