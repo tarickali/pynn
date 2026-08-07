@@ -755,9 +755,9 @@ Steps 8–15 of the plan in Part 3, plus the structural work in Part 2 that they
 | Line coverage | 84% | **98.6%**, with a 95% floor enforced in CI |
 | CI | none | green on Python 3.10–3.14, reproducible locally |
 | A plain list of layers on a Module | silently never trained | `TypeError` naming `ModuleList` |
-| `pytest -m "not external"` | 175 passed | **571 passed** |
-| `python -m pynn.verify` | 187 checks | **257 checks** |
-| Gradient-checked operations | 111 | **151** |
+| `pytest -m "not external"` | 175 passed | **674 passed** |
+| `python -m pynn.verify` | 187 checks | **302 checks** |
+| Gradient-checked operations | 111 | **178** |
 | `Sequential([Sequential([...]), ...])` | `AttributeError` in `update()` | trains |
 | Evaluating a model | builds a full graph and discards it | `no_grad()` records nothing |
 | A float32 array through `Tensor` | silently float64 | stays float32, gradient included |
@@ -876,6 +876,60 @@ The lesson is in `scripts/ci_matrix.sh`: every failure above was invisible on th
 interpreter, and the loop for discovering that was a push and a wait. It runs every CI
 step against every supported Python in a throwaway virtualenv per version.
 
+### Activations, losses, and optimizers
+
+**Activations.** `GELU` (exact and the tanh approximation), `SiLU`/Swish, `LogSoftmax`,
+and `PReLU`. Three are stateless and subclass `Activation`; `PReLU` learns its negative
+slope, which makes it the one with a design question. A parameter outside the module
+tree is one no optimizer ever steps, so it is a `Module` — which means
+`Linear(4, 3, activation="prelu")` registers it as a child and trains its slope at
+`act_fn.alpha` alongside the weights. The factory's return type widens to cover both.
+
+Storing its `num_parameters` argument under that name shadowed `Module.num_parameters()`
+and turned every call into `"int object is not callable"`. It is `num_slopes`
+internally, and a test now walks every shipped Module for attributes that hide a Module
+method.
+
+`log_softmax` exists because `log(softmax(z))` is `-inf` for any class the softmax
+rounds to zero — exactly the class a cross-entropy loss cares about. GELU's exact path
+needs `erf`, which NumPy does not have and SciPy supplies only through an optional
+extra, so it goes through `math.erf` per element and the tanh approximation stays the
+default.
+
+**Losses.** `HuberLoss`/`SmoothL1Loss`, `SparseCategoricalCrossentropy` for integer
+labels, `BCEWithLogitsLoss` as a distinct class, and a uniform
+`reduction='mean' | 'sum' | 'none'` on every loss. The reduction goes through one shared
+reducer: each loss supplies its per-item value and a `backward`, and reduction is the
+only thing that differs between the three modes, which is what stops them drifting
+apart.
+
+`BCELoss` was an alias for `BinaryCrossentropy`, which defaults to `logits=True`. That
+is backwards from PyTorch, where `BCELoss` takes probabilities and `BCEWithLogitsLoss`
+takes logits — so anyone reaching for the familiar name got the other function, and got
+it silently, since both accept the same shapes and return a plausible number. They are
+now distinct classes with the PyTorch meanings.
+
+**Optimizers.** `AdamW`, the `StepLR` / `ExponentialLR` / `CosineAnnealingLR` schedules,
+and `clip_grad_norm` / `clip_grad_value`.
+
+AdamW differs from `Adam(weight_decay=...)` by one line, and the line is the point: Adam
+folds the decay into the gradient, so it passes through the same `1/sqrt(v)` rescaling
+as everything else and a parameter with a large second moment receives *less* decay than
+one with a small moment. The regularization strength ends up depending on gradient
+history. AdamW applies it to the parameter directly. The closed-form transcription in
+the tests is what pins the distinction down; "the loss went down" would not.
+
+The schedules are pure functions of the epoch rather than of the previous learning rate,
+so they resume from a state dict and an extra `step()` cannot compound a rounding error.
+One check asserts the rate actually reaches the optimizer — a schedule computing rates
+nobody reads would otherwise pass every other test.
+
+`clip_grad_norm` takes the norm over every parameter at once and scales the whole set by
+a single factor. Scaling each tensor separately would change their relative sizes, which
+is to say it would change the direction of the step, and the direction is the part the
+gradient got right. Clipping is meant to shorten the step, not turn it; the tests assert
+the cosine with the original is 1.
+
 ### Presentation
 
 - `docs/DESIGN.md` — the tape, the topological sort, `unbroadcast`, why the losses are fused, the
@@ -896,32 +950,52 @@ Nothing here is a correctness bug. In rough order of value:
 1. **Differentiable indexing, `concat`, `stack`, `split`.** `Tensor.__getitem__` returns a raw
    NumPy array and drops the graph, which is the blocker for everything below it: `Embedding`
    needs a differentiable gather, attention needs `concat`, and a recurrent cell needs to slice a
-   sequence. This is the structural item now, the way `Sequential` was before it.
+   sequence. This is the structural item, the way `Sequential` was before it.
 2. **`Embedding` and a recurrent cell.** Backprop-through-time is the most interview-relevant
    thing missing, and the iterative topological sort exists precisely so an unrolled recurrence
    does not blow the stack — it has just never been exercised. Depends on item 1.
-3. **More losses and optimizers.** `AdamW` (decoupled weight decay, a nice contrast with Adam's
-   L2), learning-rate schedulers, `clip_grad_norm`, `HuberLoss`, `BCEWithLogitsLoss` as a distinct
-   class, sparse integer-label cross-entropy, and a uniform `reduction` argument. Each is small
-   and independent, so this is the item to pick up when time is short.
-4. **More activations.** `GELU` (exact and tanh), `SiLU`, `LogSoftmax`, and `PReLU` — a
-   *learnable* activation, which is the one that tests whether `Activation` and `Module` actually
-   compose.
-5. **Numba removal.** Step 8 of Part 3 was never carried out. `pynn/core/primitives.py` still
+3. **Numba removal.** Step 8 of Part 3, still never carried out. `pynn/core/primitives.py`
    decorates every elementwise primitive with `@njit` (a no-op fallback when Numba is absent),
-   and the measurements in 1.8 still stand: 1.9x slower than plain NumPy on a 2000x2000 add, and
-   a test suite that goes from 1.7s to 12.1s with it installed. Deleting a dependency that costs
-   performance is a stronger signal than keeping it because it sounds fast.
-6. **`CONTRIBUTING.md`** with a "how to add a layer" walkthrough — subclass `Module`, implement
+   and the measurements in 1.8 stand: 1.9x slower than plain NumPy on a 2000x2000 add, and a test
+   suite that goes from 1.7s to 12.1s with it installed. The reason it loses is worth writing
+   down rather than just asserting — see the note below.
+4. **`CONTRIBUTING.md`** with a "how to add a layer" walkthrough: subclass `Module`, implement
    `forward`/`build`/`hyperparameters`, add the functional op with its `reverse`, add a gradcheck
    entry. Plus `CHANGELOG.md` and a tagged `v0.1.0`.
-7. **Packaging polish.** `py.typed` so the type hints are visible to consumers, `__version__` in
-   `pynn/__init__.py`, and TestPyPI — being able to say `pip install` works is a differentiator,
-   and publishing forces the packaging to stay honest.
-8. **A graph visualizer** (`Tensor.to_dot()`). Cheap to write, and a computation-graph diagram in
+5. **Packaging polish.** `py.typed` so the type hints are visible to consumers, `__version__` in
+   `pynn/__init__.py`, and TestPyPI — publishing forces the packaging to stay honest.
+6. **A graph visualizer** (`Tensor.to_dot()`). Cheap to write, and a computation-graph diagram in
    the README is the most effective way to show a reader the tape is real.
-9. **`.pre-commit-config.yaml`**, and Hypothesis property tests over `unbroadcast` — that function
+7. **`.pre-commit-config.yaml`**, and Hypothesis property tests over `unbroadcast` — that function
    is fiddly enough to deserve generated shapes rather than a hand-written list.
-10. **Pinned tool versions.** `ruff>=0.6` and `mypy>=1.11` let CI install anything newer than the
-    local versions, and a newer `ruff format` can reformat code that is clean here. Worth pinning
-    once the churn becomes annoying; the matrix script makes it cheap to find out.
+8. **Pinned tool versions.** `ruff>=0.6` and `mypy>=1.11` let CI install anything newer than the
+   local versions, and a newer `ruff format` can reformat code that is clean here.
+9. **Remaining nice-to-haves.** `Mish` and `Hardswish`; `KLDivLoss` and `HingeLoss`; `NAdam`;
+   `ReduceLROnPlateau` and `OneCycleLR`; `ConvTranspose2d` for an autoencoder example;
+   `Reshape`/`Unflatten` as the inverse of `Flatten`; a `pynn.metrics` module (accuracy,
+   precision/recall/F1, confusion matrix); a second example domain such as a char-level RNN.
+
+### Why Numba loses here, since the measurement is counter-intuitive
+
+`@njit` is supposed to be faster, and on the code it is designed for it is. The primitives in
+`pynn/core/primitives.py` are not that code. Each one is a thin elementwise wrapper — `add(a, b)`
+is `a + b` — over an operation NumPy already dispatches to a vectorized SIMD or BLAS kernel
+written in C. There is no Python-level loop left for Numba to remove, so there is nothing to win,
+and three things to lose:
+
+- **Dispatch cost per call.** Every call crosses the Python/JIT boundary and unboxes its
+  arguments. For an operation whose body is one C call, that overhead is the whole cost.
+- **Compilation on first use.** Each new dtype and rank combination triggers a fresh compile,
+  which is most of the 1.7s → 12.1s the test suite loses: it exercises many small shapes once
+  each and pays the compile every time without ever amortizing it.
+- **No fusion across calls.** Numba can fuse loops *within* a compiled function. These are
+  separate functions called one at a time by the tape, so each still writes a full intermediate
+  array to memory. Elementwise work on large arrays is memory-bandwidth-bound, and the bandwidth
+  is unchanged.
+
+Numba would pay off on the parts that *do* have a Python loop, and the library has exactly one
+left: `col2im`'s scatter over the output grid in the reverse pass of `conv2d` and the pooling
+layers. That is the only place worth measuring before deciding, and it is a much better argument
+for keeping an optional Numba path than the elementwise primitives are. The honest options are to
+delete the layer, or to move it to `col2im` and re-measure; what is not defensible is keeping it
+where it is because it sounds fast.
