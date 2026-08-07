@@ -271,7 +271,7 @@ python -m pynn.verify
 # then, on 3.12 only: upload coverage.xml to Codecov
 ```
 
-To reproduce a CI run locally, in one line:
+To reproduce a CI run locally on the current interpreter:
 
 ```bash
 ruff check pynn tests examples scripts benchmarks \
@@ -280,6 +280,24 @@ ruff check pynn tests examples scripts benchmarks \
   && pytest -m "not external" --cov=pynn \
   && python -m pynn.verify
 ```
+
+To reproduce it on **every** version in the matrix — which is the useful one, because
+the failures worth catching are the ones a single interpreter cannot see:
+
+```bash
+scripts/ci_matrix.sh
+```
+
+It builds a throwaway virtualenv per version under `$TMPDIR/pynn-ci-matrix` (reused on
+later runs, override with `CI_MATRIX_ENVS`) and runs each CI step in order, reporting
+per-step pass or fail. Versions not on `PATH` as `python3.10` … `python3.14` are
+reported and skipped; `brew install python@3.11` and so on to fill the gaps.
+
+Three separate CI failures have already come from version-specific behaviour that the
+newest interpreter cannot reproduce: mypy aborting on older NumPy stubs, `argparse`
+rejecting an empty `nargs="*"` before 3.12, and annotation faults only the newest NumPy
+stubs catch. Run this before pushing anything that touches typing, the CLI, or NumPy
+usage.
 
 ---
 
@@ -356,4 +374,5 @@ second one would upload the same report twice.
 | MNIST data | `python scripts/download_mnist.py` |
 | Notebook | `jupyter lab examples/mnist.ipynb` |
 | Full install | `pip install -r requirements-dev.txt` |
+| CI on every Python | `scripts/ci_matrix.sh` |
 | Refresh READ_FILES.md | `python scripts/generate_read_files.py` |
