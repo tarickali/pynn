@@ -16,10 +16,18 @@ from pynn.nn.activations import (
 )
 from pynn.nn.containers import ModuleDict, ModuleList
 from pynn.nn.losses import (
+    BCELoss,
+    BCEWithLogitsLoss,
     BinaryCrossentropy,
     CategoricalCrossentropy,
+    CrossEntropyLoss,
+    HuberLoss,
+    L1Loss,
     MeanAbsoluteError,
     MeanSquaredError,
+    MSELoss,
+    SmoothL1Loss,
+    SparseCategoricalCrossentropy,
 )
 from pynn.nn.models import Sequential
 from pynn.nn.modules import (
@@ -35,12 +43,6 @@ from pynn.nn.modules import (
     MaxPool2d,
 )
 
-# PyTorch-style aliases
-BCELoss = BinaryCrossentropy
-CrossEntropyLoss = CategoricalCrossentropy
-MSELoss = MeanSquaredError
-L1Loss = MeanAbsoluteError
-
 __all__ = [
     "ELU",
     "GELU",
@@ -49,6 +51,7 @@ __all__ = [
     "Affine",
     "AvgPool2d",
     "BCELoss",
+    "BCEWithLogitsLoss",
     "BatchNorm1d",
     "BatchNorm2d",
     "BinaryCrossentropy",
@@ -57,6 +60,7 @@ __all__ = [
     "CrossEntropyLoss",
     "Dropout",
     "Flatten",
+    "HuberLoss",
     "Identity",
     "L1Loss",
     "LayerNorm",
@@ -74,7 +78,9 @@ __all__ = [
     "Sequential",
     "SiLU",
     "Sigmoid",
+    "SmoothL1Loss",
     "SoftPlus",
     "Softmax",
+    "SparseCategoricalCrossentropy",
     "Tanh",
 ]

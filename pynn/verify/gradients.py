@@ -28,8 +28,10 @@ from pynn.core.types import Array
 from pynn.functional.losses import (
     binary_crossentropy,
     categorical_crossentropy,
+    huber,
     mean_absolute_error,
     mean_squared_error,
+    sparse_categorical_crossentropy,
 )
 from pynn.functional.modules import (
     avg_pool2d,
@@ -665,6 +667,85 @@ def gradient_cases(seed: int = DEFAULT_SEED) -> list[GradientCase]:
             "loss categorical ce from probabilities",
             lambda ts: categorical_crossentropy(class_targets, ts[0], logits=False),
             [Tensor(rng.uniform(0.1, 0.9, (6, 4)))],
+        ),
+    ]
+
+    # Huber switches formula at |r| = delta. Residuals are kept clear of the join,
+    # where the second derivative jumps and a central difference straddles both pieces.
+    huber_targets = Tensor(np.zeros((4, 3)))
+    cases += [
+        (
+            "loss huber inside delta",
+            lambda ts: huber(huber_targets, ts[0], delta=2.0),
+            [Tensor(rng.uniform(0.2, 0.8, (4, 3)) * rng.choice([-1.0, 1.0], (4, 3)))],
+        ),
+        (
+            "loss huber beyond delta",
+            lambda ts: huber(huber_targets, ts[0], delta=0.5),
+            [Tensor(rng.uniform(2.0, 4.0, (4, 3)) * rng.choice([-1.0, 1.0], (4, 3)))],
+        ),
+        (
+            "loss huber reduction=sum",
+            lambda ts: huber(huber_targets, ts[0], delta=1.0, reduction="sum"),
+            [Tensor(rng.uniform(0.1, 0.5, (4, 3)))],
+        ),
+    ]
+
+    # The sparse form has a different reverse pass from the one-hot form — it scatters
+    # into the label positions rather than subtracting a dense target.
+    sparse_labels = rng.integers(0, 4, 6)
+    cases += [
+        (
+            "loss sparse categorical ce from logits",
+            lambda ts: sparse_categorical_crossentropy(sparse_labels, ts[0]),
+            [normal(6, 4)],
+        ),
+        (
+            "loss sparse categorical ce from probabilities",
+            lambda ts: sparse_categorical_crossentropy(
+                sparse_labels, ts[0], logits=False
+            ),
+            [Tensor(rng.uniform(0.1, 0.9, (6, 4)))],
+        ),
+        (
+            "loss sparse categorical ce reduction=sum",
+            lambda ts: sparse_categorical_crossentropy(
+                sparse_labels, ts[0], reduction="sum"
+            ),
+            [normal(6, 4)],
+        ),
+    ]
+
+    # An unreduced loss is not a scalar, so it is contracted against a second tensor to
+    # give the check something to differentiate — and that contraction is exactly how a
+    # caller weighting examples would use it.
+    weights = normal(6, 1)
+    cases += [
+        (
+            "loss bce reduction=none",
+            lambda ts: pmath.sum(
+                binary_crossentropy(binary_targets, ts[0], reduction="none") * ts[1]
+            ),
+            [normal(6, 1), weights],
+        ),
+        (
+            "loss categorical ce reduction=none",
+            lambda ts: pmath.sum(
+                categorical_crossentropy(class_targets, ts[0], reduction="none") * ts[1]
+            ),
+            [normal(6, 4), normal(6)],
+        ),
+        (
+            "loss mse reduction=none",
+            lambda ts: pmath.sum(
+                mean_squared_error(ts[0], ts[1], reduction="none") * ts[2]
+            ),
+            [normal(4, 3), normal(4, 3), normal(4, 3)],
+        ),
+        (
+            "loss huber reduction=none",
+            lambda ts: pmath.sum(huber(huber_targets, ts[0], reduction="none") * ts[1]),
+            [Tensor(rng.uniform(0.1, 0.6, (4, 3))), normal(4, 3)],
         ),
     ]
 

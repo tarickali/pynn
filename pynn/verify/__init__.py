@@ -57,6 +57,7 @@ from pynn.verify.invariants import (
     check_invariants,
     check_modules,
     check_optimizers,
+    check_training,
 )
 from pynn.verify.report import CheckReport, CheckResult
 from pynn.verify.stability import check_stability
@@ -78,6 +79,7 @@ __all__ = [
     "check_modules",
     "check_optimizers",
     "check_stability",
+    "check_training",
     "gradient_cases",
     "numerical_gradient",
     "run_all",

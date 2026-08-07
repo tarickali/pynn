@@ -25,7 +25,18 @@ from pynn.functional.initializers import fans, he_normal
 from pynn.nn import BatchNorm1d, Dropout, Linear, ModuleDict, ModuleList, Sequential
 from pynn.nn.factories import activation_factory, initializer_factory
 from pynn.nn.losses import MeanSquaredError
-from pynn.optim import SGD, Adadelta, Adagrad, Adam, RMSprop
+from pynn.optim import (
+    SGD,
+    Adadelta,
+    Adagrad,
+    Adam,
+    AdamW,
+    CosineAnnealingLR,
+    ExponentialLR,
+    RMSprop,
+    StepLR,
+    clip_grad_norm,
+)
 from pynn.verify.report import CheckReport
 
 __all__ = [
@@ -34,6 +45,7 @@ __all__ = [
     "check_invariants",
     "check_modules",
     "check_optimizers",
+    "check_training",
 ]
 
 ACTIVATION_NAMES = [
@@ -346,6 +358,34 @@ def check_optimizers() -> CheckReport:
         bool(np.allclose(_trajectory(Adadelta, learning_rate=lr), expected)),
     )
 
+    # --- AdamW ------------------------------------------------------------ #
+    # Adam folds weight decay into the gradient, so it goes through the same
+    # 1/sqrt(v) rescaling as everything else and a parameter with a large second
+    # moment gets less decay. AdamW applies it to the parameter directly.
+    lr, decay = 0.01, 0.1
+    expected, value, m, v = [], start, 0.0, 0.0
+    for step in range(1, steps + 1):
+        m = beta_1 * m + (1 - beta_1) * grad
+        v = beta_2 * v + (1 - beta_2) * grad**2
+        value -= lr * decay * value
+        value -= lr * (m / (1 - beta_1**step)) / (np.sqrt(v / (1 - beta_2**step)) + eps)
+        expected.append(value)
+    report.add(
+        "AdamW matches the decoupled reference update",
+        bool(
+            np.allclose(
+                _trajectory(AdamW, learning_rate=lr, weight_decay=decay), expected
+            )
+        ),
+    )
+    report.add(
+        "AdamW decay is not rescaled by the second moment",
+        not np.allclose(
+            _trajectory(Adam, learning_rate=lr, weight_decay=decay),
+            _trajectory(AdamW, learning_rate=lr, weight_decay=decay),
+        ),
+    )
+
     # --- flags and shared behavior ---------------------------------------- #
     for optimizer_cls in ALL_OPTIMIZERS:
         name = optimizer_cls.__name__
@@ -388,6 +428,95 @@ def check_optimizers() -> CheckReport:
             last_loss < first_loss,
             f"{first_loss:.4f} -> {last_loss:.4f}",
         )
+
+    return report
+
+
+def check_training() -> CheckReport:
+    """Verify the learning-rate schedules and gradient clipping."""
+
+    report = CheckReport(name="training")
+
+    def rates(scheduler_cls, epochs: int = 6, **kwargs) -> list[float]:
+        optimizer = SGD([{"w": Tensor(np.array([1.0]))}], learning_rate=0.1)
+        scheduler = scheduler_cls(optimizer, **kwargs)
+        values = [optimizer.learning_rate]
+        for _ in range(epochs):
+            scheduler.step()
+            values.append(optimizer.learning_rate)
+        return values
+
+    report.add(
+        "StepLR drops on a staircase",
+        bool(
+            np.allclose(
+                rates(StepLR, step_size=3, gamma=0.5),
+                [0.1, 0.1, 0.1, 0.05, 0.05, 0.05, 0.025],
+            )
+        ),
+    )
+    report.add(
+        "ExponentialLR decays every epoch",
+        bool(
+            np.allclose(
+                rates(ExponentialLR, gamma=0.9), [0.1 * 0.9**e for e in range(7)]
+            )
+        ),
+    )
+    annealed = rates(CosineAnnealingLR, epochs=10, T_max=10, eta_min=0.001)
+    report.add(
+        "CosineAnnealingLR reaches eta_min at T_max",
+        bool(np.isclose(annealed[0], 0.1) and np.isclose(annealed[-1], 0.001)),
+        f"{annealed[0]:.4f} -> {annealed[-1]:.4f}",
+    )
+
+    # A schedule that computed rates nobody read would satisfy every check above.
+    optimizer = SGD([{"w": Tensor(np.array([1.0]))}], learning_rate=0.1)
+    parameter = optimizer.parameters[0]["w"]
+    StepLR(optimizer, step_size=1, gamma=0.0).step()
+    parameter.grad = np.array([0.7])
+    optimizer.update()
+    report.add(
+        "a schedule's rate reaches the optimizer",
+        bool(np.allclose(parameter.data, 1.0)),
+        f"a zero learning rate left the parameter at {parameter.data.tolist()}",
+    )
+
+    # Clipping shortens the step; it must not turn it.
+    module = Linear(2, 1)
+    module.parameters["a"] = Tensor(np.array([3.0, 4.0]))
+    module.parameters["b"] = Tensor(np.array([12.0, 0.0]))
+    for name in ("a", "b"):
+        module.parameters[name].grad = module.parameters[name].data.copy()
+    before = [module.parameters[name].grad.copy() for name in ("a", "b")]
+
+    reported = clip_grad_norm(module, max_norm=1.0)
+    after = [module.parameters[name].grad for name in ("a", "b")]
+    total = float(np.sqrt(sum(float((g**2).sum()) for g in after)))
+
+    report.add(
+        "clip_grad_norm reports the norm before clipping",
+        bool(np.isclose(reported, 13.0)),
+        f"reported {reported:.4f}, expected 13.0",
+    )
+    report.add(
+        "clip_grad_norm brings the total norm to the limit",
+        bool(np.isclose(total, 1.0, rtol=1e-3)),
+        f"{total:.6f}",
+    )
+    report.add(
+        "clip_grad_norm preserves the step direction",
+        all(
+            bool(
+                np.isclose(
+                    float(np.dot(original, clipped))
+                    / float(np.linalg.norm(original) * np.linalg.norm(clipped)),
+                    1.0,
+                )
+            )
+            for original, clipped in zip(before, after, strict=True)
+        ),
+    )
 
     return report
 
@@ -695,6 +824,12 @@ def check_invariants() -> CheckReport:
     """Run the autodiff, optimizer, module, and API invariant checks together."""
 
     report = CheckReport(name="invariants")
-    for suite in (check_autodiff(), check_optimizers(), check_modules(), check_api()):
+    for suite in (
+        check_autodiff(),
+        check_optimizers(),
+        check_modules(),
+        check_training(),
+        check_api(),
+    ):
         report.extend(suite)
     return report

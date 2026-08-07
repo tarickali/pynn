@@ -8,7 +8,7 @@
 **PyNN** is a small, NumPy-based neural network library with automatic differentiation. It provides a PyTorch-like API for building and training feedforward and convolutional models from scratch, with no dependency on PyTorch or TensorFlow.
 
 Every differentiable operation is checked against central-difference numerical gradients
-— 151 checks, including branching graph topologies — and the design decisions behind the
+— 178 checks, including branching graph topologies — and the design decisions behind the
 tape are written up in [`docs/DESIGN.md`](docs/DESIGN.md).
 
 ---
@@ -19,9 +19,9 @@ tape are written up in [`docs/DESIGN.md`](docs/DESIGN.md).
 - **Layers** — `Linear`, `Conv2d`, `MaxPool2d`, `AvgPool2d`, `Dropout`, `LayerNorm`, `BatchNorm1d`/`BatchNorm2d`, `Flatten`, and a generic `Activation` wrapper. `Sequential` is itself a `Module`, so containers nest; `ModuleList` and `ModuleDict` hold layers whose wiring you decide.
 - **Module tree** — recursive `named_parameters()`, `state_dict()`/`load_state_dict()`, `save`/`load`, `train()`/`eval()` mode propagation, and `freeze()`/`unfreeze()` that the optimizers honor. Assigning a plain list of layers to an attribute raises rather than silently leaving them untrained.
 - **Autodiff controls** — `no_grad()` for inference that builds no graph, `Tensor.detach()`, and `requires_grad` tracking.
-- **Activations** — Identity, ReLU (and LeakyReLU), Sigmoid, Tanh, Softmax (with configurable axis), ELU, SELU, SoftPlus, Affine.
-- **Losses** — Binary and categorical cross-entropy (logits or probabilities), mean squared error, mean absolute error; MSE supports `reduction='mean'` or `'sum'`.
-- **Optimizers** — SGD (momentum, weight decay, Nesterov), Adam, RMSprop, Adagrad, Adadelta, with standard hyperparameters.
+- **Activations** — Identity, ReLU (and LeakyReLU), Sigmoid, Tanh, Softmax and LogSoftmax (with configurable axis), ELU, SELU, GELU (exact and tanh), SiLU/Swish, SoftPlus, Affine, and PReLU — a *learnable* activation, which is a `Module` so its slope reaches the optimizer.
+- **Losses** — Binary and categorical cross-entropy (logits or probabilities, one-hot or integer labels), mean squared error, mean absolute error, and Huber/SmoothL1. Every loss takes `reduction='mean' | 'sum' | 'none'`.
+- **Optimizers** — SGD (momentum, weight decay, Nesterov), Adam, AdamW (decoupled decay), RMSprop, Adagrad, Adadelta, with standard hyperparameters. Plus `StepLR` / `ExponentialLR` / `CosineAnnealingLR` schedules and `clip_grad_norm`.
 - **Initializers** — Zeros, ones, constant, random uniform/normal, Xavier (Glorot), He, and LeCun variants (uniform and normal). Fan-in and fan-out are read from the weight layout, so a `Conv2d` kernel is scaled by its receptive field rather than by its output-channel count.
 - **Utilities** — `one_hot`, shuffled batch iteration (`get_batches`), `im2col` / `col2im`, and `set_seed` for a reproducible run.
 - **Verified gradients** — every differentiable operation is checked against central-difference numerical gradients, including broadcasting and non-linear graph topologies (shared inputs, residual connections, tied weights). The checker is public API: see [Verification](#verification).
@@ -93,10 +93,10 @@ optimizer.update()
 | **`pynn.core.math`** | `abs`, `sum`, `mean`, `exp`, `log` (import as a module — these shadow builtins). |
 | **`pynn.core.utils`** | `unbroadcast`, `matrix_multiply_gradients` (backward-pass shape plumbing). |
 | **`pynn.core.numeric`** | `stable_sigmoid` (overflow-free kernel shared by the activations and losses). |
-| **`pynn.nn`** | Layers: `Linear`, `Conv2d`, `MaxPool2d`, `AvgPool2d`, `Dropout`, `LayerNorm`, `BatchNorm1d`, `BatchNorm2d`, `Flatten`, `Activation`. Containers: `Sequential`, `ModuleList`, `ModuleDict`. Activations: `ReLU`, `Sigmoid`, `Tanh`, `Softmax`, `ELU`, `SELU`, `SoftPlus`, `Identity`, `Affine`. Losses: `BinaryCrossentropy`, `CategoricalCrossentropy`, `MeanSquaredError`, `MeanAbsoluteError` (aliases: `BCELoss`, `CrossEntropyLoss`, `MSELoss`, `L1Loss`). |
+| **`pynn.nn`** | Layers: `Linear`, `Conv2d`, `MaxPool2d`, `AvgPool2d`, `Dropout`, `LayerNorm`, `BatchNorm1d`, `BatchNorm2d`, `Flatten`, `Activation`. Containers: `Sequential`, `ModuleList`, `ModuleDict`. Activations: `ReLU`, `Sigmoid`, `Tanh`, `Softmax`, `ELU`, `SELU`, `SoftPlus`, `Identity`, `Affine`. Losses: `BinaryCrossentropy`, `CategoricalCrossentropy`, `SparseCategoricalCrossentropy`, `MeanSquaredError`, `MeanAbsoluteError`, `HuberLoss` (aliases: `BCELoss`, `BCEWithLogitsLoss`, `CrossEntropyLoss`, `MSELoss`, `L1Loss`, `SmoothL1Loss`). |
 | **`pynn.nn.factories`** | `activation_factory`, `initializer_factory`. |
 | **`pynn.functional`** | Activation functions (`relu`, `sigmoid`, `softmax`, ...). Losses and module functions live in `pynn.functional.losses` and `pynn.functional.modules`. |
-| **`pynn.optim`** | `SGD`, `Adam`, `RMSprop`, `Adagrad`, `Adadelta`. |
+| **`pynn.optim`** | `SGD`, `Adam`, `AdamW`, `RMSprop`, `Adagrad`, `Adadelta`; `StepLR`, `ExponentialLR`, `CosineAnnealingLR`; `clip_grad_norm`, `clip_grad_value`. |
 | **`pynn.utils`** | `one_hot`, `get_batches` (shuffled by default), `make_pair`, `pad_for_conv`, `im2col` / `col2im`, `get_data_and_grad`. |
 | **`pynn.verify`** | Self-verification suite: `check_gradients` and `numerical_gradient` for your own operations, plus `check_all_gradients`, `check_stability`, `check_invariants`, and `run_all`. |
 
@@ -227,11 +227,11 @@ python -m pynn.verify stability    # one suite
 ```
 
 ```
-gradients: 151/151 passed (OK)
-invariants: 86/86 passed (OK)
-stability: 20/20 passed (OK)
+gradients: 178/178 passed (OK)
+invariants: 100/100 passed (OK)
+stability: 24/24 passed (OK)
 
-pynn.verify: 257/257 passed (OK)
+pynn.verify: 302/302 passed (OK)
 ```
 
 Three suites:
