@@ -10,7 +10,7 @@ Run everything from the repository root unless noted.
 ### Which Python
 
 | | |
-|---|---|
+| --- | --- |
 | Declared support | **3.10 – 3.14** (`requires-python = ">=3.10"`, CI matrix) |
 | Local `.venv` | **3.14.1** (Homebrew `python@3.14`) |
 
@@ -33,7 +33,7 @@ repository depends on its contents; those three commands reproduce it exactly.
 Three files cover the three situations anyone is actually in:
 
 | File | Installs | For |
-|---|---|---|
+| --- | --- | --- |
 | `requirements.txt` | the library, NumPy only | running `pynn`, `python -m pynn.verify` |
 | `requirements-dev.txt` | + tests, lint, types, examples, notebook, benchmarks | working on the repository |
 | `requirements-external.txt` | + torch, tensorflow | the `external`-marked comparison tests |
@@ -233,7 +233,7 @@ comparison columns blank.
 **Expected** (Apple M-series, both libraries at their own threading defaults):
 
 | Model | pynn ms/step | torch ms/step | Ratio |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | MLP 784-256-256-10 | ~3.7 | ~2.2 | ~1.7x |
 | CNN 2 conv + 2 pool | ~80 | ~8 | ~10x |
 
@@ -262,8 +262,9 @@ jupyter kernelspec uninstall cs224n
 
 ## 8. What CI runs
 
-`.github/workflows/ci.yml`, on every push to `main` and every pull request, across Python
-3.10 / 3.11 / 3.12 / 3.13 / 3.14:
+`.github/workflows/ci.yml` runs two jobs on every push to `main` and every pull request.
+
+**`check`**, across Python 3.10 / 3.11 / 3.12 / 3.13 / 3.14:
 
 ```bash
 pip install -e ".[dev]"
@@ -274,6 +275,12 @@ pytest -m "not external" --cov=pynn --cov-report=xml --cov-report=term-missing
 python -m pynn.verify
 # then, on 3.12 only: upload coverage.xml to Codecov
 ```
+
+**`numba`**, on 3.12 only, installing `".[dev,numba]"`. The `check` matrix installs only
+`[dev]`, so it never runs the compiled `col2im` — a Numba-specific compilation failure
+would reach a user before it reached CI. The job asserts `NUMBA_AVAILABLE` is true before
+running anything, so it cannot pass on the NumPy fallback if the extra failed to install.
+
 
 To reproduce a CI run locally on the current interpreter:
 
@@ -366,7 +373,7 @@ second one would upload the same report twice.
 ## Quick reference
 
 | Task | Command |
-|---|---|
+| --- | --- |
 | Tests | `pytest -m "not external"` |
 | Tests + coverage floor | `pytest -m "not external" --cov=pynn` |
 | Self-verification | `python -m pynn.verify` |

@@ -70,3 +70,39 @@ jobs:
 
       - name: Verify
         run: python -m pynn.verify
+
+  numba:
+    # The `check` matrix installs only [dev], so it never exercises the compiled
+    # col2im — a Numba-specific compilation failure would reach a user before it
+    # reached CI. One job with the extra installed closes that.
+    name: Numba extra
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,numba]"
+
+      - name: Confirm the compiled path is actually in use
+        # Without this the job would pass on the NumPy fallback if Numba failed to
+        # install, which is the one outcome it exists to rule out.
+        run: |
+          python -c "
+          from pynn.utils.array import NUMBA_AVAILABLE
+          assert NUMBA_AVAILABLE, 'numba installed but the compiled scatter is not active'
+          print('compiled scatter active')
+          "
+
+      - name: Pytest
+        run: pytest -m "not external"
+
+      - name: Verify
+        run: python -m pynn.verify

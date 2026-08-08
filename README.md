@@ -89,7 +89,7 @@ optimizer.update()
 ## API Overview
 
 | Area | Contents |
-|------|----------|
+| ------ | ---------- |
 | **`pynn.core`** | `Tensor` (autograd), `Module` (the layer/container tree), `Loss`, `Optimizer`, `Activation`, `Initializer`, `no_grad` / `enable_grad` / `set_grad_enabled`, types, constants. |
 | **`pynn.core.math`** | `abs`, `sum`, `mean`, `exp`, `log` (import as a module — these shadow builtins). |
 | **`pynn.core.utils`** | `unbroadcast`, `matrix_multiply_gradients` (backward-pass shape plumbing). |
@@ -281,7 +281,7 @@ PyNN against PyTorch on CPU, same architecture and batch size on both, median ov
 steps of forward + backward + optimizer step:
 
 | Model | Batch | Parameters | pynn ms/step | torch ms/step | Ratio | pynn examples/s |
-|---|---|---|---|---|---|---|
+| --- | --- | --- | --- | --- | --- | --- |
 | MLP 784-256-256-10 | 128 | 269,322 | 3.7 | 2.2 | 1.7x | 34,192 |
 | CNN 2 conv + 2 pool | 64 | 20,522 | 78.6 | 7.8 | 10.1x | 814 |
 

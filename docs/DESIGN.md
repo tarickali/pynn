@@ -298,7 +298,7 @@ fix, rather than iterating a dict's keys and silently stepping nothing.
 `Tensor` carries both `requires_grad` and `trainable`, and they are not the same thing:
 
 | Flag | Means | Set by |
-|---|---|---|
+| --- | --- | --- |
 | `requires_grad` | connected to the graph; `backward` can reach it | `no_grad`, `detach` |
 | `trainable` | an optimizer may step it | `Module.freeze()` |
 
@@ -364,7 +364,7 @@ raises rather than quietly returning zeros.
 Four places where the obvious formula is wrong at the edges:
 
 | Function | Naive form | Problem | Used instead |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `sigmoid` | `1 / (1 + exp(-x))` | overflows for large negative `x` | branch on the sign, `pynn/core/numeric.py` |
 | `softplus` | `log(1 + exp(x))` | `softplus(800)` → `inf` | `np.logaddexp(0, x)` |
 | `log` | `log(x + EPSILON)` | `EPSILON ≈ 2.2e-16` is far too small to tame `log(0)`, and it biases the result everywhere | clamp the input |
@@ -524,7 +524,7 @@ the point: compiling removes exactly the loop overhead that made it slow. Measur
 small CNN:
 
 | | ms/step | vs PyTorch |
-|---|---|---|
+| --- | --- | --- |
 | NumPy scatter | 75.5 | 9.3x |
 | Compiled scatter | 59.3 | 6.5x |
 
@@ -568,7 +568,7 @@ being readable.
 ## Reading order
 
 | Start here | For |
-|---|---|
+| --- | --- |
 | `pynn/core/tensor.py` | The tape: `add_children`, `reverse`, `backward`, the topological sort |
 | `pynn/core/utils.py` | `unbroadcast` and `matrix_multiply_gradients` |
 | `pynn/functional/activations.py` | The closure pattern, nine times |

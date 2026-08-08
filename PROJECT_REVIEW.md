@@ -38,7 +38,7 @@ silently producing wrong gradients.
 Affected (all of these use `=`):
 
 | File | Functions |
-|------|-----------|
+| ------ | ----------- |
 | `pynn/core/math.py` | `abs`, `sum`, `mean`, `exp`, `log` |
 | `pynn/functional/activations.py` | `affine`, `relu`, `sigmoid`, `tanh`, `elu`, `selu`, `softplus`, `softmax` |
 | `pynn/functional/losses.py` | `binary_crossentropy`, `categorical_crossentropy` |
@@ -281,7 +281,7 @@ default.
 Verified false claims in the API Overview table:
 
 | README says | Reality |
-|---|---|
+| --- | --- |
 | `pynn.core` exports math: `abs`, `sum`, `mean`, `exp`, `log` | `pynn/core/__init__.py` does not import `math`; none are accessible |
 | `pynn.core` exports `expand_array` / `shrink_array` | Not exported from `pynn.core` |
 | `pynn.nn` exports `activation_factory`, `initializer_factory` | `pynn/nn/__init__.py` doesn't import `factories` |
@@ -313,7 +313,7 @@ root, not inside `pynn/`.
 Nothing is configured today. Current state if you turn the tools on:
 
 | Tool | Result at review time | After Tier 1 fixes |
-|------|-----------------------|--------------------|
+| ------ | ----------------------- | -------------------- |
 | `ruff check` (default rules) | **64 errors** — 37 `I001` unsorted imports, 17 `RUF022` unsorted `__all__`, 3 `F841` unused vars, 2 `RUF013` implicit `Optional`, 2 `TRY004`, plus `RET501`, `RUF059`, `UP031` | still outstanding (config is step 9) |
 | `ruff check --select F,E9 --ignore F403,F405` | 3 `F841` | **clean** |
 | `ruff check --select F403,F405` | **73 errors** — 16 star-imports, 57 names used from them | unchanged |
@@ -420,7 +420,7 @@ coverage of basic neural network layers", in priority order:
 **Essential — a reviewer will notice these are missing:**
 
 | Layer | Why |
-|-------|-----|
+| ------- | ----- |
 | `Dropout` | The canonical reason to need train/eval modes (see D) |
 | `BatchNorm1d` / `BatchNorm2d` | Running statistics + separate train/eval behavior; the single best demonstration that your autodiff handles non-trivial layers |
 | `LayerNorm` | Simpler than BatchNorm, and the modern default |
@@ -610,7 +610,7 @@ Steps 1–7 of the plan above. Every Tier 1 bug is fixed, with a regression test
 ### Measured effect
 
 | | Before | After |
-|---|---|---|
+| --- | --- | --- |
 | `pytest` on a clean checkout | aborts at collection (3 import errors) | 175 passed, 1 skipped |
 | Line coverage | 25% | 84% |
 | MNIST test accuracy (`examples/mnist.py`) | 94.38% | **98.04%** |
@@ -691,7 +691,7 @@ thrown away, so the properties they established stay established. It runs agains
 of PyNN without pytest — `python -m pynn.verify` — and is also driven from `tests/test_verify.py`.
 
 | Module | Suite | Checks |
-|--------|-------|--------|
+| -------- | ------- | -------- |
 | `verify/gradients.py` | `check_all_gradients` | 111 — every op against central differences |
 | `verify/stability.py` | `check_stability` | 20 — finiteness at `|x|` up to 1000 |
 | `verify/invariants.py` | `check_invariants` | 56 — tape, optimizer, and factory behavior |
@@ -751,7 +751,7 @@ Steps 8–15 of the plan in Part 3, plus the structural work in Part 2 that they
 ### Measured effect
 
 | | After Tier 1 | Now |
-|---|---|---|
+| --- | --- | --- |
 | Line coverage | 84% | **98.6%**, with a 95% floor enforced in CI |
 | CI | none | green on Python 3.10–3.14, reproducible locally |
 | A plain list of layers on a Module | silently never trained | `TypeError` naming `ModuleList` |
@@ -951,7 +951,7 @@ contribute to the same input pixel and `+=` on overlapping slices does not vecto
 Compiling that one function:
 
 | | ms/step | vs PyTorch |
-|---|---|---|
+| --- | --- | --- |
 | NumPy scatter | 75.5 | 9.3x |
 | Compiled scatter | 59.3 | 6.5x |
 
