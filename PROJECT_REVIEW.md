@@ -755,7 +755,7 @@ Steps 8–15 of the plan in Part 3, plus the structural work in Part 2 that they
 | Line coverage | 84% | **98.6%**, with a 95% floor enforced in CI |
 | CI | none | green on Python 3.10–3.14, reproducible locally |
 | A plain list of layers on a Module | silently never trained | `TypeError` naming `ModuleList` |
-| `pytest -m "not external"` | 175 passed | **674 passed** |
+| `pytest -m "not external"` | 175 passed | **681 passed** |
 | `python -m pynn.verify` | 187 checks | **302 checks** |
 | Gradient-checked operations | 111 | **178** |
 | `Sequential([Sequential([...]), ...])` | `AttributeError` in `update()` | trains |
@@ -930,6 +930,41 @@ is to say it would change the direction of the step, and the direction is the pa
 gradient got right. Clipping is meant to shorten the step, not turn it; the tests assert
 the cosine with the original is 1.
 
+### Numba, relocated and measured
+
+Step 8 of Part 3 was "remove Numba", on the strength of the 1.8 measurement: the `@njit`
+primitives were 1.9x *slower* than plain NumPy and took the test suite from 1.7s to 17s.
+That measurement was right, and the conclusion drawn from it was half right.
+
+The primitives are thin wrappers over single NumPy calls — `add(a, b)` is `a + b` — which
+are already vectorized C kernels. There is no Python-level loop for a JIT to remove, so
+compiling them can only add: dispatch across the Python/JIT boundary on every call (the
+entire cost, when the body is one C call), a fresh compile per dtype and rank
+combination, and no fusion across calls, since the tape invokes each separately. Those
+decorators are gone.
+
+But the library has exactly one Python-level loop left, and profiling a CNN training step
+puts **42% of the time** in it: `col2im`, the scatter in the reverse pass of `conv2d` and
+the pooling layers. It cannot be a single NumPy call, because overlapping windows
+contribute to the same input pixel and `+=` on overlapping slices does not vectorize.
+
+Compiling that one function:
+
+| | ms/step | vs PyTorch |
+|---|---|---|
+| NumPy scatter | 75.5 | 9.3x |
+| Compiled scatter | 59.3 | 6.5x |
+
+A 1.27x end-to-end speedup on a small CNN from one `@njit`, and nothing on an MLP, which
+never touches `col2im`. The scatter therefore exists twice — a NumPy block loop and the
+same logic as explicit scalar loops for the JIT — with tests asserting they agree across
+geometries with and without window overlap. The extra stays optional: `llvmlite` is
+130 MB, which should be a choice rather than a condition of installing a NumPy library.
+
+The general lesson is worth more than the speedup: a JIT does not make code fast, it
+removes interpreter overhead. Where there is none to remove it can only add cost. Profile
+first, compile what the profile names.
+
 ### Presentation
 
 - `docs/DESIGN.md` — the tape, the topological sort, `unbroadcast`, why the losses are fused, the
@@ -945,57 +980,20 @@ the cosine with the original is 1.
 
 ## Part 6 — What is still open
 
-Nothing here is a correctness bug. In rough order of value:
+Nothing here is a correctness bug. The queue lives in [`TASKS.md`](TASKS.md), which is
+kept current; this section records only what changed about the *shape* of the backlog.
 
-1. **Differentiable indexing, `concat`, `stack`, `split`.** `Tensor.__getitem__` returns a raw
-   NumPy array and drops the graph, which is the blocker for everything below it: `Embedding`
-   needs a differentiable gather, attention needs `concat`, and a recurrent cell needs to slice a
-   sequence. This is the structural item, the way `Sequential` was before it.
-2. **`Embedding` and a recurrent cell.** Backprop-through-time is the most interview-relevant
-   thing missing, and the iterative topological sort exists precisely so an unrolled recurrence
-   does not blow the stack — it has just never been exercised. Depends on item 1.
-3. **Numba removal.** Step 8 of Part 3, still never carried out. `pynn/core/primitives.py`
-   decorates every elementwise primitive with `@njit` (a no-op fallback when Numba is absent),
-   and the measurements in 1.8 stand: 1.9x slower than plain NumPy on a 2000x2000 add, and a test
-   suite that goes from 1.7s to 12.1s with it installed. The reason it loses is worth writing
-   down rather than just asserting — see the note below.
-4. **`CONTRIBUTING.md`** with a "how to add a layer" walkthrough: subclass `Module`, implement
-   `forward`/`build`/`hyperparameters`, add the functional op with its `reverse`, add a gradcheck
-   entry. Plus `CHANGELOG.md` and a tagged `v0.1.0`.
-5. **Packaging polish.** `py.typed` so the type hints are visible to consumers, `__version__` in
-   `pynn/__init__.py`, and TestPyPI — publishing forces the packaging to stay honest.
-6. **A graph visualizer** (`Tensor.to_dot()`). Cheap to write, and a computation-graph diagram in
-   the README is the most effective way to show a reader the tape is real.
-7. **`.pre-commit-config.yaml`**, and Hypothesis property tests over `unbroadcast` — that function
-   is fiddly enough to deserve generated shapes rather than a hand-written list.
-8. **Pinned tool versions.** `ruff>=0.6` and `mypy>=1.11` let CI install anything newer than the
-   local versions, and a newer `ruff format` can reformat code that is clean here.
-9. **Remaining nice-to-haves.** `Mish` and `Hardswish`; `KLDivLoss` and `HingeLoss`; `NAdam`;
-   `ReduceLROnPlateau` and `OneCycleLR`; `ConvTranspose2d` for an autoencoder example;
-   `Reshape`/`Unflatten` as the inverse of `Flatten`; a `pynn.metrics` module (accuracy,
-   precision/recall/F1, confusion matrix); a second example domain such as a char-level RNN.
+Everything Part 2 called essential is done. What remains splits into one structural item
+and a pile of independent additions:
 
-### Why Numba loses here, since the measurement is counter-intuitive
+- **Structural.** `Tensor.__getitem__` returns a raw NumPy array and drops the graph.
+  Differentiable indexing, and `concat` / `stack` / `split` alongside it, is what
+  `Embedding`, attention, and a recurrent cell all wait on. It is the last item of the
+  kind that unblocks a category of model rather than adding one layer — the role
+  nestable `Sequential` played before it.
+- **Everything else** — more layers, losses, optimizers and schedules, `CONTRIBUTING.md`,
+  `py.typed`, a graph visualizer, pre-commit — is independent and can be picked up or
+  dropped in any order.
 
-`@njit` is supposed to be faster, and on the code it is designed for it is. The primitives in
-`pynn/core/primitives.py` are not that code. Each one is a thin elementwise wrapper — `add(a, b)`
-is `a + b` — over an operation NumPy already dispatches to a vectorized SIMD or BLAS kernel
-written in C. There is no Python-level loop left for Numba to remove, so there is nothing to win,
-and three things to lose:
-
-- **Dispatch cost per call.** Every call crosses the Python/JIT boundary and unboxes its
-  arguments. For an operation whose body is one C call, that overhead is the whole cost.
-- **Compilation on first use.** Each new dtype and rank combination triggers a fresh compile,
-  which is most of the 1.7s → 12.1s the test suite loses: it exercises many small shapes once
-  each and pays the compile every time without ever amortizing it.
-- **No fusion across calls.** Numba can fuse loops *within* a compiled function. These are
-  separate functions called one at a time by the tape, so each still writes a full intermediate
-  array to memory. Elementwise work on large arrays is memory-bandwidth-bound, and the bandwidth
-  is unchanged.
-
-Numba would pay off on the parts that *do* have a Python loop, and the library has exactly one
-left: `col2im`'s scatter over the output grid in the reverse pass of `conv2d` and the pooling
-layers. That is the only place worth measuring before deciding, and it is a much better argument
-for keeping an optional Numba path than the elementwise primitives are. The honest options are to
-delete the layer, or to move it to `col2im` and re-measure; what is not defensible is keeping it
-where it is because it sounds fast.
+The one item this section carried for three passes, "remove Numba", is resolved above:
+relocated to `col2im` and measured, where it is worth 1.27x on a CNN.
