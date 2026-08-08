@@ -80,3 +80,76 @@ def test_im2col_result_is_detached_from_the_input():
     cols = im2col(x, (2, 2), (1, 1), (2, 2))
     x[:] = 0
     assert cols.sum() == 4 * 4  # four patches of four ones
+
+
+# --------------------------------------------------------------------------- #
+# The two scatter implementations
+#
+# col2im's inner scatter exists twice: a NumPy block loop, and the same thing as
+# scalar loops for the JIT to compile. Duplicated logic is a correctness risk, so what
+# is asserted here is that they agree — including on the geometries where windows
+# overlap, which is the only reason the scatter has to accumulate at all.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "kernel,stride,padding",
+    [
+        ((2, 2), (2, 2), (0, 0)),  # no overlap
+        ((3, 3), (1, 1), (0, 0)),  # heavy overlap
+        ((3, 3), (2, 2), (1, 1)),  # overlap plus padding
+        ((1, 1), (1, 1), (0, 0)),  # degenerate
+        ((5, 5), (1, 1), (2, 2)),  # every window overlaps every neighbour
+    ],
+    ids=str,
+)
+def test_both_scatter_implementations_agree(rng, kernel, stride, padding):
+    from pynn.utils.array import _scatter_windows_numpy, _scatter_windows_scalar
+
+    batch, channels, height, width = 3, 2, 7, 7
+    kh, kw = kernel
+    ph, pw = padding
+    out_h = (height + 2 * ph - kh) // stride[0] + 1
+    out_w = (width + 2 * pw - kw) // stride[1] + 1
+
+    patches = rng.standard_normal((batch, channels, out_h, out_w, kh, kw))
+    shape = (batch, channels, height + 2 * ph, width + 2 * pw)
+
+    block = np.zeros(shape)
+    _scatter_windows_numpy(patches, block, out_h, out_w, kh, kw, *stride)
+
+    scalar = np.zeros(shape)
+    _scatter_windows_scalar(patches, scalar, out_h, out_w, kh, kw, *stride)
+
+    assert np.array_equal(block, scalar)
+
+
+def test_the_scatter_accumulates_where_windows_overlap():
+    """A scatter that assigned instead of adding would pass a no-overlap test."""
+    from pynn.utils.array import _scatter_windows_numpy, _scatter_windows_scalar
+
+    # 2x2 windows at stride 1 over a 3x3 image: the centre pixel is in all four.
+    patches = np.ones((1, 1, 2, 2, 2, 2))
+    for scatter in (_scatter_windows_numpy, _scatter_windows_scalar):
+        padded = np.zeros((1, 1, 3, 3))
+        scatter(patches, padded, 2, 2, 2, 2, 1, 1)
+        assert padded[0, 0, 1, 1] == 4.0
+        assert padded[0, 0, 0, 0] == 1.0
+
+
+def test_col2im_is_correct_whichever_scatter_is_in_use(rng):
+    """`NUMBA_AVAILABLE` picks the implementation; the result must not depend on it."""
+    from pynn.utils.array import NUMBA_AVAILABLE
+
+    x = rng.standard_normal((2, 3, 6, 6))
+    kernel, stride, padding = (3, 3), (1, 1), (0, 0)
+    out_h = out_w = 4
+
+    cols = im2col(x, kernel, stride, (out_h, out_w))
+    cols_grad = rng.standard_normal(cols.shape)
+    x_grad = col2im(cols_grad, x.shape, kernel, stride, padding, (out_h, out_w))
+
+    # The adjoint identity holds for either implementation, so it pins down the result
+    # without needing to know which one ran.
+    assert np.allclose((cols * cols_grad).sum(), (x * x_grad).sum())
+    assert isinstance(NUMBA_AVAILABLE, bool)

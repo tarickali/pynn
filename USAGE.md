@@ -47,7 +47,7 @@ pip install -e ".[examples]"   # scikit-learn
 pip install -e ".[mnist]"      # + pandas
 pip install -e ".[notebook]"   # matplotlib, jupyterlab, ipykernel, nbclient
 pip install -e ".[benchmark]"  # torch
-pip install -e ".[numba]"      # not recommended; see below
+pip install -e ".[numba]"      # compiles the convolution backward pass
 ```
 
 **Two groups sit outside `requirements-dev.txt` on purpose:**
@@ -55,8 +55,11 @@ pip install -e ".[numba]"      # not recommended; see below
 - **`external`** — TensorFlow lags new Python releases and has **no wheel for 3.14**, so
   folding it in would make the one-command install fail on the very interpreter this
   project uses. The tests that need it are marked `external` and skip themselves.
-- **`numba`** — measured 1.9x *slower* than plain NumPy on a 2000x2000 add, and it takes
-  the test suite from 1.7 s to 12.1 s. Installable only so the claim stays reproducible.
+- **`numba`** — compiles `col2im`, the scatter in the reverse pass of `conv2d` and the
+  pooling layers, which profiling puts at about 40% of a CNN training step. Worth roughly
+  1.27x end-to-end on a small CNN and nothing at all on an MLP, which never touches it.
+  Optional because `llvmlite` is 130 MB; the library is fully functional without it and
+  the results are identical either way.
 
 ### Check it worked
 
@@ -79,7 +82,7 @@ pytest --cov=pynn                   # + coverage, enforces the 95% floor
 pytest --cov=pynn --cov-report=term-missing   # + which lines are uncovered
 ```
 
-**Expected:** `571 passed, 1 skipped, 6 deselected` · `Total coverage: 98.57%`
+**Expected:** `681 passed, 1 skipped, 6 deselected` · `Total coverage: ~98.4%`
 
 Narrower runs:
 

@@ -1,10 +1,10 @@
-try:
-    from numba import njit
-except ImportError:
+"""Elementwise and matrix primitives, one thin wrapper per NumPy operation.
 
-    def njit(f):
-        return f  # no JIT if numba not installed
-
+They exist so that `Tensor`'s operators read as names rather than symbols, and so the
+forward computation for each is in one place next to nothing else. Every body is a
+single NumPy call, which is already a vectorized C kernel — there is no Python-level
+loop here for a JIT to remove, and nothing to gain by compiling them.
+"""
 
 from .types import Array, Number
 
@@ -26,71 +26,57 @@ __all__ = [
 ]
 
 
-@njit
 def add(x: Array, y: Array) -> Array:
     return x + y
 
 
-@njit
 def subtract(x: Array, y: Array) -> Array:
     return x - y
 
 
-@njit
 def multiply(x: Array, y: Array) -> Array:
     return x * y
 
 
-# NOTE: Generic matrix multiplication is not support with numba
 def matrix_multiply(x: Array, y: Array) -> Array:
     return x @ y
 
 
-@njit
 def true_division(x: Array, y: Array) -> Array:
     return x / y
 
 
-@njit
 def power(x: Array, y: Number) -> Array:
     return x**y
 
 
-@njit
 def negate(x: Array) -> Array:
     return -x
 
 
-@njit
 def transpose(x: Array) -> Array:
     return x.T
 
 
-@njit
 def equal(x: Array, y: Array) -> Array:
     return x == y
 
 
-@njit
 def not_equal(x: Array, y: Array) -> Array:
     return x != y
 
 
-@njit
 def greater_than_equal(x: Array, y: Array) -> Array:
     return x >= y
 
 
-@njit
 def greater_than(x: Array, y: Array) -> Array:
     return x > y
 
 
-@njit
 def less_than_equal(x: Array, y: Array) -> Array:
     return x <= y
 
 
-@njit
 def less_than(x: Array, y: Array) -> Array:
     return x < y

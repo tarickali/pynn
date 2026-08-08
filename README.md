@@ -24,6 +24,7 @@ tape are written up in [`docs/DESIGN.md`](docs/DESIGN.md).
 - **Optimizers** — SGD (momentum, weight decay, Nesterov), Adam, AdamW (decoupled decay), RMSprop, Adagrad, Adadelta, with standard hyperparameters. Plus `StepLR` / `ExponentialLR` / `CosineAnnealingLR` schedules and `clip_grad_norm`.
 - **Initializers** — Zeros, ones, constant, random uniform/normal, Xavier (Glorot), He, and LeCun variants (uniform and normal). Fan-in and fan-out are read from the weight layout, so a `Conv2d` kernel is scaled by its receptive field rather than by its output-channel count.
 - **Utilities** — `one_hot`, shuffled batch iteration (`get_batches`), `im2col` / `col2im`, and `set_seed` for a reproducible run.
+- **Optional acceleration** — the `numba` extra compiles the convolution backward pass for a ~1.27x speedup on a CNN; results are identical with or without it.
 - **Verified gradients** — every differentiable operation is checked against central-difference numerical gradients, including broadcasting and non-linear graph topologies (shared inputs, residual connections, tied weights). The checker is public API: see [Verification](#verification).
 
 ---
@@ -285,8 +286,13 @@ steps of forward + backward + optimizer step:
 | CNN 2 conv + 2 pool | 64 | 20,522 | 78.6 | 7.8 | 10.1x | 814 |
 
 *Python 3.14, NumPy 2.4, PyTorch 2.13, Apple M-series CPU. Both libraries at their own
-threading defaults. Run-to-run variation is roughly ±15%; reproduce with*
-`python -m benchmarks.benchmark`.
+threading defaults, PyNN without the optional `numba` extra. Run-to-run variation is
+roughly ±15%; reproduce with* `python -m benchmarks.benchmark`.
+
+Installing `pip install -e ".[numba]"` compiles the scatter in the convolution backward
+pass — about 40% of a CNN step, and the only Python-level loop left in the library. That
+takes the CNN row to **59.3 ms/step (6.5x)**. The MLP is unchanged, since it never
+touches that code.
 
 Being slower than PyTorch is the expected outcome — the interesting part is the gap
 between the two rows. The MLP is dominated by `matmul`, where both libraries hand the

@@ -498,7 +498,50 @@ initialization and `Dropout` draw from, so a single `set_seed(n)` makes a whole 
 reproducible. It is a `numpy.random.Generator`, not the legacy global `numpy.random`,
 which cannot be seeded independently of anything else in the process.
 
-## 14. What was left out, and why
+## 14. One compiled function, and why only one
+
+The library ships a `numba` extra. It compiles exactly one function, and the reasoning
+for *which* one is the interesting part.
+
+The obvious thing to compile is the elementwise primitives — `add`, `multiply`, and so
+on. That was the original design and it was a mistake. Those bodies are a single NumPy
+call, which is already a vectorized C kernel; there is no Python-level loop for a JIT to
+remove. What compiling them adds is per-call dispatch across the Python/JIT boundary
+(the whole cost, when the body is one C call), a fresh compile per dtype and rank
+combination, and no fusion across calls, since each is invoked separately by the tape.
+Measured: **1.9x slower** than plain NumPy on a 2000×2000 add, and a test suite that went
+from 1.7s to 17s.
+
+The place that *does* have a Python loop is `col2im`, the scatter in the reverse pass of
+`conv2d` and the pooling layers. It cannot be one NumPy call: overlapping windows
+contribute to the same input pixel, so the scatter must accumulate, and `+=` on
+overlapping slices is not something NumPy vectorizes. Profiling a CNN training step puts
+**42% of the time** there.
+
+So the scatter exists twice — a NumPy block loop, and the same logic as explicit scalar
+loops that the JIT compiles. In pure Python the scalar version is far slower, which is
+the point: compiling removes exactly the loop overhead that made it slow. Measured on a
+small CNN:
+
+| | ms/step | vs PyTorch |
+|---|---|---|
+| NumPy scatter | 75.5 | 9.3x |
+| Compiled scatter | 59.3 | 6.5x |
+
+A 1.27x end-to-end speedup from compiling one function. An MLP is unchanged, since it
+never touches `col2im`.
+
+Two implementations of one algorithm is a correctness risk, so `tests/utils/array_test.py`
+asserts they agree across geometries with and without overlap, and `col2im`'s adjoint
+identity is checked either way. The extra stays optional: `llvmlite` is 130 MB, which
+should be a choice rather than a condition of installing a NumPy library.
+
+The general lesson is the one worth taking from this: a JIT does not make code fast, it
+removes interpreter overhead. Where there is no interpreter overhead to remove — a thin
+wrapper over a C kernel — it can only add cost. Profile first, then compile the thing the
+profile names.
+
+## 15. What was left out, and why
 
 **Differentiable indexing, `concat`, `stack`, `split`.** `Tensor.__getitem__` returns a
 raw NumPy array and drops the graph. Everything currently shipped works on whole tensors,
@@ -515,11 +558,10 @@ is the point of the project.
 **A graph visualizer.** `Tensor.to_dot()` would be cheap and would make the tape
 inspectable. Not written yet.
 
-**Numba.** Removed rather than kept. It broke `Tensor.__getitem__` (Numba cannot compile
-a method taking `self`), and its `@njit` primitives were elementwise wrappers over
-operations NumPy already dispatches to BLAS — measured 1.9x *slower* on a 2000×2000 add,
-and the test suite went from 1.7s to 12.1s with it installed. Deleting a dependency that
-costs performance is a better engineering signal than keeping it because it sounds fast.
+**Operator fusion beyond `col2im`.** The JIT covers the one Python loop that was
+worth compiling (§14). Everything else is already a single NumPy call, and fusing
+*across* calls would mean an expression compiler, which is where the code would stop
+being readable.
 
 ---
 

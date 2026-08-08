@@ -1,6 +1,21 @@
+"""Array helpers behind `conv2d` and the pooling layers.
+
+`im2col` and `col2im` are what turn a sliding-window convolution into a single matrix
+multiply. The forward direction is a strided view and a `gemm`, with no Python loop
+left in it. The reverse direction cannot be: overlapping windows contribute to the same
+input pixel, so the scatter has to accumulate, and `+=` on overlapping slices is not
+something NumPy can vectorize in one call.
+
+That scatter is the only Python-level loop left in the library, and on a small CNN it
+is around 40% of a training step. It is therefore the one place where compiling
+actually pays — see `scatter_windows` below.
+"""
+
+from collections.abc import Callable
+
 import numpy as np
 
-__all__ = ["col2im", "im2col", "make_pair", "pad_for_conv"]
+__all__ = ["NUMBA_AVAILABLE", "col2im", "im2col", "make_pair", "pad_for_conv"]
 
 
 def make_pair(x: int | tuple[int, int]) -> tuple[int, int]:
@@ -88,6 +103,81 @@ def im2col(
     )
 
 
+def _scatter_windows_numpy(
+    patches: np.ndarray,
+    padded: np.ndarray,
+    out_h: int,
+    out_w: int,
+    kh: int,
+    kw: int,
+    sh: int,
+    sw: int,
+) -> None:
+    """Add every window's contribution back into `padded`, in place.
+
+    One iteration per output position, each adding a whole `(batch, channels, kh, kw)`
+    block. NumPy does the inner work, so the loop is over the output grid rather than
+    over pixels — but it is still a Python loop, and it is where the reverse pass of a
+    convolution spends most of its time.
+    """
+    for oh in range(out_h):
+        h_start = oh * sh
+        for ow in range(out_w):
+            w_start = ow * sw
+            padded[:, :, h_start : h_start + kh, w_start : w_start + kw] += patches[
+                :, :, oh, ow
+            ]
+
+
+def _scatter_windows_scalar(
+    patches: np.ndarray,
+    padded: np.ndarray,
+    out_h: int,
+    out_w: int,
+    kh: int,
+    kw: int,
+    sh: int,
+    sw: int,
+) -> None:
+    """The same scatter as explicit scalar loops, which is what a JIT wants.
+
+    Deliberately the slower shape in pure Python — six nested loops over individual
+    elements — and the faster one once compiled, since the compiler removes the loop
+    overhead that made it slow and NumPy's per-call dispatch along with it. Kept
+    byte-for-byte equivalent to `_scatter_windows_numpy`; `tests/utils/array_test.py`
+    asserts the two agree.
+    """
+    for n in range(patches.shape[0]):
+        for c in range(patches.shape[1]):
+            for oh in range(out_h):
+                h_start = oh * sh
+                for ow in range(out_w):
+                    w_start = ow * sw
+                    for i in range(kh):
+                        for j in range(kw):
+                            padded[n, c, h_start + i, w_start + j] += patches[
+                                n, c, oh, ow, i, j
+                            ]
+
+
+ScatterWindows = Callable[[np.ndarray, np.ndarray, int, int, int, int, int, int], None]
+
+try:
+    from numba import njit
+except ImportError:  # pragma: no cover - depends on an optional extra being absent
+    #: Whether the compiled scatter is in use. `pynn` is fully functional without it;
+    #: `numba` is an optional extra precisely because a 150 MB dependency should be a
+    #: choice, not a condition of installing a NumPy library.
+    NUMBA_AVAILABLE = False
+    scatter_windows: ScatterWindows = _scatter_windows_numpy
+else:  # pragma: no cover - depends on an optional extra being present
+    NUMBA_AVAILABLE = True
+    # cache=True writes the compiled form next to the source, so the ~1s compile is
+    # paid once per machine rather than once per process. Numba degrades to an
+    # in-memory cache if the directory is read-only.
+    scatter_windows = njit(cache=True)(_scatter_windows_scalar)
+
+
 def col2im(
     cols: np.ndarray,
     input_shape: tuple[int, int, int, int],
@@ -115,6 +205,12 @@ def col2im(
     -------
     np.ndarray
         Gradient w.r.t. the unpadded input, of shape ``input_shape``.
+
+    Notes
+    -----
+    This is the hot spot of a convolutional backward pass — roughly 40% of a training
+    step for a small CNN. Installing the `numba` extra compiles the scatter and cuts
+    that step by about a third; see `scatter_windows`.
     """
     batch, channels, height, width = input_shape
     kh, kw = kernel_size
@@ -130,15 +226,11 @@ def col2im(
         0, 3, 1, 2, 4, 5
     )
     # Overlapping patches contribute to the same input pixel, so each window is added
-    # rather than assigned. The forward pass is a single matmul; this loop is only on
-    # the reverse pass and runs over the (much smaller) output grid.
-    for oh in range(out_h):
-        h_start = oh * sh
-        for ow in range(out_w):
-            w_start = ow * sw
-            padded[:, :, h_start : h_start + kh, w_start : w_start + kw] += patches[
-                :, :, oh, ow
-            ]
+    # rather than assigned. `scatter_windows` is the compiled scalar loop when Numba is
+    # installed and the NumPy block loop otherwise; the two agree exactly.
+    if NUMBA_AVAILABLE:
+        patches = np.ascontiguousarray(patches)
+    scatter_windows(patches, padded, out_h, out_w, kh, kw, sh, sw)
 
     if ph == 0 and pw == 0:
         return padded

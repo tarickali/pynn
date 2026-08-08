@@ -59,9 +59,10 @@ external = [
     "torch>=2.0",
     "tensorflow>=2.12",
 ]
-# Optional and currently not recommended: measured 1.9x slower than plain NumPy on a
-# 2000x2000 add, and it takes the test suite from 1.7s to 12.1s. Kept installable so
-# the claim stays reproducible. See PROJECT_REVIEW.md Part 6, item 10.
+# Compiles the scatter in the reverse pass of conv2d and the pooling layers, which is
+# around 40% of a CNN training step and the only Python-level loop left in the library.
+# Worth ~1.27x end-to-end on a small CNN, nothing on an MLP. Optional because llvmlite
+# is 130 MB and the library is fully functional without it.
 numba = [
     "numba>=0.57",
 ]
