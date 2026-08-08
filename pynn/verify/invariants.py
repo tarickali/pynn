@@ -20,7 +20,7 @@ import numpy as np
 
 import pynn.core.math as pmath
 import pynn.functional as F
-from pynn.core import Module, Tensor, is_grad_enabled, no_grad
+from pynn.core import Module, Tensor, concat, is_grad_enabled, no_grad, split
 from pynn.functional.initializers import fans, he_normal
 from pynn.nn import BatchNorm1d, Dropout, Linear, ModuleDict, ModuleList, Sequential
 from pynn.nn.factories import activation_factory, initializer_factory
@@ -86,17 +86,17 @@ def check_autodiff() -> CheckReport:
 
     report = CheckReport(name="autodiff")
 
-    # Indexing must not be routed through a JIT decorator that cannot compile a
-    # bound method; that made every subscript raise whenever Numba was installed.
+    # Indexing has to stay on the tape. Returning a raw array drops the graph with no
+    # error at all, so a model that slices a sequence trains nothing upstream of it.
     tensor = Tensor(np.arange(12.0).reshape(3, 4))
     try:
-        # Copy, since indexing returns a view into the underlying array.
-        row = np.array(tensor[0])
-        tensor[0] = np.zeros(4)
+        row = tensor[0]
+        tensor[1] = np.zeros(4)
         report.add(
             "Tensor supports indexing and assignment",
-            row.tolist() == [0.0, 1.0, 2.0, 3.0]
-            and np.asarray(tensor[0]).tolist() == [0.0] * 4,
+            isinstance(row, Tensor)
+            and row.data.tolist() == [0.0, 1.0, 2.0, 3.0]
+            and tensor[1].data.tolist() == [0.0] * 4,
         )
     except Exception as error:
         report.add(
@@ -104,6 +104,43 @@ def check_autodiff() -> CheckReport:
             False,
             f"raised {type(error).__name__}: {error}",
         )
+
+    indexed = Tensor(np.arange(6.0).reshape(3, 2))
+    pmath.sum(indexed[[0, 0, 2]]).backward()
+    report.add(
+        "indexing scatters its gradient back, accumulating on repeats",
+        bool(np.array_equal(indexed.grad, [[2.0, 2.0], [0.0, 0.0], [1.0, 1.0]])),
+        f"{indexed.grad.tolist()} (row 0 was read twice)",
+    )
+
+    # concat has many inputs and one output; split has one input and many outputs.
+    # Both are where a reverse pass sends a gradient to the wrong place quietly.
+    head, tail = Tensor(np.ones((2, 3))), Tensor(np.zeros((2, 4)))
+    pmath.sum(concat([head, tail], axis=1) * np.arange(7.0)).backward()
+    report.add(
+        "concat splits its gradient back to each input",
+        bool(
+            np.array_equal(head.grad, np.tile(np.arange(3.0), (2, 1)))
+            and np.array_equal(tail.grad, np.tile(np.arange(3.0, 7.0), (2, 1)))
+        ),
+    )
+
+    whole = Tensor(np.ones((6, 2)))
+    top, _, bottom = split(whole, 3)
+    (pmath.sum(top) + pmath.sum(bottom) * 2.0).backward()
+    report.add(
+        "split routes each piece's gradient to its own slice",
+        bool(np.array_equal(whole.grad[:, 0], [1.0, 1.0, 0.0, 0.0, 2.0, 2.0])),
+        f"{whole.grad[:, 0].tolist()}",
+    )
+
+    shared = Tensor(np.ones((2, 2)))
+    pmath.sum(concat([shared, shared], axis=0)).backward()
+    report.add(
+        "a tensor concatenated with itself receives both gradients",
+        bool(np.allclose(shared.grad, 2.0)),
+        f"max {shared.grad.max()}",
+    )
 
     # Transposing must stay on the tape. Returning a detached Tensor here yields a
     # zero gradient with no error at all.

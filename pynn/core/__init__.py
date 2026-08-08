@@ -11,6 +11,7 @@ from .initializer import Initializer
 from .loss import Loss
 from .module import Module
 from .optimizer import Optimizer
+from .shape import concat, split, stack
 from .tensor import Tensor
 from .types import Array, ArrayLike, DataType, List, Number, Shape
 
@@ -32,8 +33,11 @@ __all__ = [
     "Optimizer",
     "Shape",
     "Tensor",
+    "concat",
     "enable_grad",
     "is_grad_enabled",
     "no_grad",
     "set_grad_enabled",
+    "split",
+    "stack",
 ]

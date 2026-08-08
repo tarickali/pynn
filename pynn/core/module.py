@@ -359,8 +359,14 @@ class Module(ABC):
             "modules": [child.summary() for child in self._modules.values()],
         }
 
-    def __call__(self, X: Tensor) -> Tensor:
-        return self.forward(X)
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        """Run the forward pass.
+
+        Forwards whatever it is given rather than a single Tensor, because a recurrent
+        cell takes a hidden state alongside its input and returns one alongside its
+        output. Every other layer here is Tensor to Tensor.
+        """
+        return self.forward(*args, **kwargs)
 
     def __repr__(self) -> str:
         return f"{self.name}({self.num_parameters()} parameters)"

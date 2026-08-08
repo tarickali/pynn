@@ -4,7 +4,7 @@ The functions here compare the gradients produced by reverse-mode autodiff again
 central-difference approximations. They are part of the public API so that users can
 verify custom layers and operations, not just the ones shipped with the library:
 
-    from pynn.core import Tensor
+    from pynn.core import Tensor, concat, split, stack
     from pynn.verify import check_gradients
 
     result = check_gradients(lambda ts: my_loss(ts[0]), [Tensor(x)])
@@ -23,7 +23,7 @@ import numpy as np
 
 import pynn.core.math as pmath
 import pynn.functional as F
-from pynn.core import Tensor
+from pynn.core import Tensor, concat, split, stack
 from pynn.core.types import Array
 from pynn.functional.losses import (
     binary_crossentropy,
@@ -892,6 +892,106 @@ def gradient_cases(seed: int = DEFAULT_SEED) -> list[GradientCase]:
             [normal(4, 5), normal(4, 5)],
         )
     )
+
+    # Indexing and shape operations. The reverse of a gather is a scatter, and the
+    # scatter has to accumulate: an index read twice contributes twice, which a plain
+    # assignment into the gradient would silently drop.
+    cases += [
+        (
+            "getitem row",
+            lambda ts: pmath.sum(ts[0][1] * ts[1]),
+            [normal(4, 4), normal(4)],
+        ),
+        (
+            "getitem slice",
+            lambda ts: pmath.sum(ts[0][1:3] * ts[1]),
+            [normal(4, 4), normal(2, 4)],
+        ),
+        (
+            "getitem column",
+            lambda ts: pmath.sum(ts[0][:, 2] * ts[1]),
+            [normal(4, 4), normal(4)],
+        ),
+        (
+            "getitem fancy",
+            lambda ts: pmath.sum(ts[0][[0, 2, 3]] * ts[1]),
+            [normal(4, 4), normal(3, 4)],
+        ),
+        # The one that catches a scatter which assigns instead of accumulating.
+        (
+            "getitem repeated index",
+            lambda ts: pmath.sum(ts[0][[1, 1, 1]] * ts[1]),
+            [normal(4, 4), normal(3, 4)],
+        ),
+        (
+            "getitem boolean mask",
+            lambda ts: pmath.sum(ts[0][np.array([True, False, True, False])] * ts[1]),
+            [normal(4, 4), normal(2, 4)],
+        ),
+        (
+            "getitem with a reused input",
+            lambda ts: pmath.sum(ts[0][0]) + pmath.sum(ts[0] * ts[1]),
+            [normal(4, 4), normal(4, 4)],
+        ),
+        (
+            "reshape",
+            lambda ts: pmath.sum(ts[0].reshape(2, 8) * ts[1]),
+            [normal(4, 4), normal(2, 8)],
+        ),
+        (
+            "concat axis=0",
+            lambda ts: pmath.sum(concat([ts[0], ts[1]]) * ts[2]),
+            [normal(2, 3), normal(4, 3), normal(6, 3)],
+        ),
+        (
+            "concat axis=1",
+            lambda ts: pmath.sum(concat([ts[0], ts[1]], axis=1) * ts[2]),
+            [normal(3, 2), normal(3, 4), normal(3, 6)],
+        ),
+        # The same tensor joined to itself: both halves of the gradient must land.
+        (
+            "concat with a tensor twice",
+            lambda ts: pmath.sum(concat([ts[0], ts[0]]) * ts[1]),
+            [normal(2, 3), normal(4, 3)],
+        ),
+        (
+            "stack",
+            lambda ts: pmath.sum(stack([ts[0], ts[1], ts[2]]) * ts[3]),
+            [normal(3, 2), normal(3, 2), normal(3, 2), normal(3, 3, 2)],
+        ),
+        (
+            "stack axis=1",
+            lambda ts: pmath.sum(stack([ts[0], ts[1]], axis=1) * ts[2]),
+            [normal(3, 2), normal(3, 2), normal(3, 2, 2)],
+        ),
+        (
+            "split",
+            lambda ts: pmath.sum(
+                sum(
+                    pmath.sum(piece * weight)
+                    for piece, weight in zip(
+                        split(ts[0], 3), [1.0, 2.0, 3.0], strict=True
+                    )
+                )
+            ),
+            [normal(6, 2)],
+        ),
+        # Only some pieces used: the unused slice must still end up at zero rather
+        # than uninitialized.
+        (
+            "split with an unused piece",
+            lambda ts: (
+                pmath.sum(split(ts[0], 3)[0] * ts[1])
+                + pmath.sum(split(ts[0], 3)[2] * ts[1])
+            ),
+            [normal(6, 2), normal(2, 2)],
+        ),
+        (
+            "split uneven sizes",
+            lambda ts: pmath.sum(concat(list(split(ts[0], [1, 3, 2]))) * ts[1]),
+            [normal(6, 2), normal(6, 2)],
+        ),
+    ]
 
     # Graph topologies where a tensor feeds more than one consumer. A plain
     # feedforward chain never exercises these, and they are where gradient

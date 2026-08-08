@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 
@@ -242,13 +242,89 @@ class Tensor:
         return output
 
     # ------------------------------------------------------------------------ #
-    # Getter and Setter
+    # Indexing and reshaping
     # ------------------------------------------------------------------------ #
-    def __getitem__(self, key: int | tuple[int] | slice) -> Array | Number:
-        return self.data[key]
+    def __getitem__(self, key: Any) -> Tensor:
+        """Index this Tensor, keeping the result on the tape.
 
-    def __setitem__(self, key: int | tuple[int] | slice, value: ArrayLike) -> None:
-        self.data[key] = value
+        Returns a Tensor, not a raw array — indexing used to drop the graph, so a model
+        that sliced a sequence or gathered rows silently trained nothing upstream of the
+        slice. Everything NumPy accepts works: integers, slices, ellipses, integer
+        arrays, and boolean masks.
+
+        Parameters
+        ----------
+        key : Any
+            Any NumPy index. A `Tensor` used as an index is unwrapped, and must hold
+            integers or booleans.
+
+        Returns
+        -------
+        Tensor
+            The selected elements. Its gradient is scattered back into the positions it
+            was read from, accumulating where an index appears more than once.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> x = Tensor(np.arange(6.0).reshape(3, 2))
+        >>> x[1].data.tolist()
+        [2.0, 3.0]
+        >>> x[[0, 0]].shape
+        (2, 2)
+        """
+        key = _unwrap_index(key)
+        advanced = _is_advanced_index(key)
+
+        output = Tensor(self.data[key])
+        output.add_children((self,))
+
+        def reverse():
+            if advanced:
+                # np.add.at, because an index may repeat and every occurrence
+                # contributes: x[[0, 0]] reads row 0 twice, so row 0's gradient is the
+                # sum of both. Plain `+=` on a fancy-indexed view would keep only one.
+                np.add.at(self.grad, key, output.grad)
+            else:
+                # A basic slice cannot name the same element twice, so `+=` on the view
+                # is correct here and much faster than the scatter above.
+                self.grad[key] += output.grad
+
+        output.forward = "getitem"
+        output.reverse = reverse
+
+        return output
+
+    def __setitem__(self, key: Any, value: Tensor | ArrayLike) -> None:
+        """Assign into this Tensor's data in place.
+
+        Deliberately *not* differentiable, and not recorded: the tape holds the
+        operations that produced a value, and overwriting part of one afterwards would
+        invalidate a node other tensors may already depend on. Use it to fill an input
+        buffer, not inside a model.
+        """
+        self.data[key] = value.data if isinstance(value, Tensor) else value
+
+    def reshape(self, *shape: int | tuple[int, ...]) -> Tensor:
+        """View this Tensor with a different shape, keeping it on the tape.
+
+        Accepts either `reshape(2, 3)` or `reshape((2, 3))`, matching NumPy.
+        """
+        if len(shape) == 1 and isinstance(shape[0], tuple):
+            resolved = shape[0]
+        else:
+            resolved = cast("tuple[int, ...]", shape)
+        output = Tensor(self.data.reshape(resolved))
+        output.add_children((self,))
+
+        def reverse():
+            # Reshaping moves no data, so the reverse is the inverse reshape.
+            self.grad += output.grad.reshape(self.data.shape)
+
+        output.forward = "reshape"
+        output.reverse = reverse
+
+        return output
 
     # ------------------------------------------------------------------------ #
     # Binary Operations
@@ -468,6 +544,44 @@ class Tensor:
     @property
     def dtype(self) -> DataType:
         return self.data.dtype
+
+
+def _unwrap_index(key: Any) -> Any:
+    """Replace any Tensor inside an index with its data.
+
+    Raises
+    ------
+    ValueError
+        If a Tensor index holds floats. Tensors default to float64, so
+        `x[Tensor([0, 1])]` would otherwise fail inside NumPy with a message about
+        array dtypes rather than about what the caller did.
+    """
+
+    def unwrap(part: Any) -> Any:
+        if not isinstance(part, Tensor):
+            return part
+        if np.issubdtype(part.dtype, np.floating):
+            raise ValueError(
+                "a Tensor used as an index must hold integers or booleans, not "
+                f"{part.dtype}. Tensors default to float64, so pass a NumPy array of "
+                "indices or cast with .cast(int)."
+            )
+        return part.data
+
+    if isinstance(key, tuple):
+        return tuple(unwrap(part) for part in key)
+    return unwrap(key)
+
+
+def _is_advanced_index(key: Any) -> bool:
+    """Whether an index can name the same element twice.
+
+    Only integer and boolean array indexing can repeat; slices, integers, ellipses and
+    `None` cannot. That distinction decides whether the reverse pass needs a scatter-add
+    or can use a much faster `+=`.
+    """
+    parts = key if isinstance(key, tuple) else (key,)
+    return any(isinstance(part, list | np.ndarray) for part in parts)
 
 
 def convert_tensor_input(value: Any) -> Tensor:
