@@ -65,7 +65,7 @@ pip install -e ".[numba]"      # compiles the convolution backward pass
 
 ```bash
 python -c "import pynn; print(pynn.__file__)"   # works from any directory
-python -m pynn.verify                           # 302/302 passed (OK)
+python -m pynn.verify                           # 332/332 passed (OK)
 ```
 
 `requirements-dev.txt` installs the library in editable mode, so `pynn` imports from
@@ -82,15 +82,16 @@ pytest --cov=pynn                   # + coverage, enforces the 95% floor
 pytest --cov=pynn --cov-report=term-missing   # + which lines are uncovered
 ```
 
-**Expected:** `681 passed, 1 skipped, 6 deselected` · `Total coverage: ~98.4%`
+**Expected:** `767 passed, 1 skipped, 6 deselected` · `Total coverage: ~98.3%`
 
 Narrower runs:
 
 ```bash
-pytest tests/test_gradcheck.py      # the 178 gradient checks, one test per operation
+pytest tests/test_gradcheck.py      # the 201 gradient checks, one test per operation
 pytest tests/core/module_test.py    # the module tree
 pytest tests/nn/layers_test.py      # Dropout, LayerNorm, BatchNorm, pooling
 pytest tests/nn/containers_test.py  # ModuleList and ModuleDict
+pytest tests/nn/recurrent_test.py    # Embedding, RNNCell, LSTMCell
 pytest -k "batch_norm"              # anything matching a name
 pytest -x -q                        # stop at the first failure
 ```
@@ -116,11 +117,11 @@ python -m pynn.verify stability invariants  # several
 **Expected:**
 
 ```
-gradients: 178/178 passed (OK)
-invariants: 100/100 passed (OK)
+gradients: 201/201 passed (OK)
+invariants: 107/107 passed (OK)
 stability: 24/24 passed (OK)
 
-pynn.verify: 302/302 passed (OK)
+pynn.verify: 332/332 passed (OK)
 ```
 
 Exit code is 0 on success, 1 on any failure, so it works as a CI gate.

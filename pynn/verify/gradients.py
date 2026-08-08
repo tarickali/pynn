@@ -38,11 +38,13 @@ from pynn.functional.modules import (
     batch_norm,
     conv2d,
     dropout,
+    embedding,
     flatten,
     layer_norm,
     linear,
     max_pool2d,
 )
+from pynn.nn import LSTMCell, RNNCell
 from pynn.verify.report import CheckReport, CheckResult
 
 __all__ = [
@@ -992,6 +994,69 @@ def gradient_cases(seed: int = DEFAULT_SEED) -> list[GradientCase]:
             [normal(6, 2), normal(6, 2)],
         ),
     ]
+
+    # Embedding, whose reverse is a scatter-add. A repeated index is the whole point:
+    # a common token appears many times in a batch and every occurrence contributes.
+    table_indices = rng.integers(0, 5, (3, 4))
+    cases += [
+        (
+            "embedding",
+            lambda ts: pmath.sum(embedding(ts[0], table_indices) * ts[1]),
+            [normal(5, 3), normal(3, 4, 3)],
+        ),
+        (
+            "embedding with a repeated index",
+            lambda ts: pmath.sum(embedding(ts[0], np.array([1, 1, 1, 2]))),
+            [normal(5, 3)],
+        ),
+        (
+            "embedding with a reused table",
+            lambda ts: pmath.sum(embedding(ts[0], np.array([0, 2]))) + pmath.sum(ts[0]),
+            [normal(5, 3)],
+        ),
+    ]
+
+    # A recurrent cell unrolled over several steps: the same weights appear once per
+    # step, so every parameter's gradient is a sum over the whole sequence. This is the
+    # shape that catches a reverse pass which assigns rather than accumulates — it
+    # would train on the last timestep only, and still descend.
+    def _unrolled(cell_type, steps: int) -> ScalarFn:
+        def scalar(ts: list[Tensor]) -> Tensor:
+            cell = cell_type(3, 4)
+            cell.parameters["W_ih"] = ts[0]
+            cell.parameters["W_hh"] = ts[1]
+            cell.parameters["b_ih"] = ts[2]
+            cell.parameters["b_hh"] = ts[3]
+            cell.input_size, cell.initialized = 3, True
+            # First step separately: it takes no incoming state, and writing it that
+            # way keeps `state` a Tensor (or a pair) rather than an optional one.
+            state = cell(ts[4])
+            for _ in range(steps - 1):
+                state = cell(ts[4], state)
+            hidden = state[0] if isinstance(state, tuple) else state
+            return pmath.sum(hidden * ts[5])
+
+        return scalar
+
+    for label, cell_type, width in [
+        ("RNNCell", RNNCell, 4),
+        ("LSTMCell", LSTMCell, 16),
+    ]:
+        for steps in (1, 4):
+            cases.append(
+                (
+                    f"{label} unrolled {steps} steps",
+                    _unrolled(cell_type, steps),
+                    [
+                        normal(3, width),
+                        normal(4, width),
+                        normal(width),
+                        normal(width),
+                        normal(2, 3),
+                        normal(2, 4),
+                    ],
+                )
+            )
 
     # Graph topologies where a tensor feeds more than one consumer. A plain
     # feedforward chain never exercises these, and they are where gradient

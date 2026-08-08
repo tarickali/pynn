@@ -42,6 +42,7 @@ from pynn.nn.modules import (
     Linear,
     MaxPool2d,
 )
+from pynn.nn.recurrent import Embedding, LSTMCell, RNNCell
 
 __all__ = [
     "ELU",
@@ -59,10 +60,12 @@ __all__ = [
     "Conv2d",
     "CrossEntropyLoss",
     "Dropout",
+    "Embedding",
     "Flatten",
     "HuberLoss",
     "Identity",
     "L1Loss",
+    "LSTMCell",
     "LayerNorm",
     "Linear",
     "LogSoftmax",
@@ -74,6 +77,7 @@ __all__ = [
     "ModuleDict",
     "ModuleList",
     "PReLU",
+    "RNNCell",
     "ReLU",
     "Sequential",
     "SiLU",

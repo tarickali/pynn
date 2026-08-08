@@ -13,6 +13,7 @@ __all__ = [
     "batch_norm",
     "conv2d",
     "dropout",
+    "embedding",
     "flatten",
     "layer_norm",
     "linear",
@@ -513,6 +514,63 @@ def avg_pool2d(
         ).reshape(x.shape)
 
     output.forward = "avg_pool2d"
+    output.reverse = reverse
+
+    return output
+
+
+def embedding(weight: Tensor, indices: Array | Tensor) -> Tensor:
+    """Look up rows of `weight` by integer index.
+
+    A differentiable gather. The reverse is a scatter-add rather than a scatter: a token
+    appearing twice in a batch contributes twice to its row, and the whole point of an
+    embedding is that common tokens appear often. Writing instead of adding would keep
+    one occurrence per row per step and quietly train frequent tokens as if they were
+    rare.
+
+    Parameters
+    ----------
+    weight : Tensor
+        Embedding table of shape ``(num_embeddings, dim)``.
+    indices : Array | Tensor
+        Integer indices of any shape. Not differentiated.
+
+    Returns
+    -------
+    Tensor
+        Shape ``(*indices.shape, dim)``.
+
+    Raises
+    ------
+    ValueError
+        If `weight` is not a matrix, or an index is out of range.
+    """
+    if weight.ndim != 2:
+        raise ValueError(
+            "embedding weight must have shape (num_embeddings, dim), got "
+            f"{weight.shape}"
+        )
+
+    lookup = indices.data if isinstance(indices, Tensor) else np.asarray(indices)
+    lookup = lookup.astype(np.intp)
+    count = weight.shape[0]
+    if lookup.size and (lookup.min() < 0 or lookup.max() >= count):
+        raise ValueError(
+            f"indices must be in [0, {count}), got range "
+            f"[{lookup.min()}, {lookup.max()}]"
+        )
+
+    flat = lookup.reshape(-1)
+    data = weight.data[flat].reshape(*lookup.shape, weight.shape[1])
+
+    output = Tensor(data)
+    output.add_children((weight,))
+
+    def reverse() -> None:
+        # np.add.at, not `weight.grad[flat] = ...`: repeated indices must accumulate.
+        np.add.at(weight.grad, flat, output.grad.reshape(-1, weight.shape[1]))
+
+    output.forward = "embedding"
     output.reverse = reverse
 
     return output

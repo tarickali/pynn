@@ -498,7 +498,51 @@ initialization and `Dropout` draw from, so a single `set_seed(n)` makes a whole 
 reproducible. It is a `numpy.random.Generator`, not the legacy global `numpy.random`,
 which cannot be seeded independently of anything else in the process.
 
-## 14. One compiled function, and why only one
+## 14. Indexing, and the graph shape the tape was built for
+
+`Tensor.__getitem__` returned a raw NumPy array for most of this library's life. That is
+the worst kind of bug it could have had: the forward pass is correct, the shapes are
+correct, and everything upstream of a slice silently receives no gradient. A model that
+gathers embeddings or slices a sequence trains its last layer and nothing else.
+
+Indexing now records a node whose reverse **scatters** the gradient back into the
+positions it was read from. The important word is scatter-*add*:
+
+```python
+x[[1, 1, 1]]        # row 1, three times
+```
+
+Row 1 contributed to three outputs, so its gradient is the sum of three. Writing instead
+of adding keeps one — and for an embedding table, where a common token appears many times
+per batch, that means frequent tokens train as though they were rare. Basic slices cannot
+name the same element twice, so those take a plain `+=` on the view; only advanced
+indexing pays for `np.add.at`.
+
+`concat` and `split` are the other two shapes. `concat` has many inputs and one output;
+`split` has one input and many outputs whose gradients land in disjoint slices of the same
+tensor. Both produce correctly-shaped results with a wrong reverse pass, which is why the
+sweep checks a tensor concatenated *with itself* and a split with an *unused* piece.
+
+### What this unblocked
+
+A recurrent cell applies **the same weights at every timestep**. Unrolled over 30 steps,
+each parameter appears on the tape 30 times, and its gradient is the sum of 30
+contributions. That is all backpropagation through time is — and it is the exact shape
+that `grad +=` versus `grad =` decides. A cell with an overwriting reverse pass trains on
+the final timestep only, and still descends, just badly enough to look like a
+learning-rate problem.
+
+It is also why `backward` uses an explicit stack (§3). A 300-step LSTM is a graph tens of
+thousands of nodes deep; a recursive topological sort raises `RecursionError` long before
+that. That stack was written early on the argument that "an unrolled recurrence would
+reach it" — and until `RNNCell` existed, nothing in the library ever had. It does now, and
+there is a check for it.
+
+`LSTMCell` computes its four gates as one matrix multiply into a `4 * hidden_size` block
+and then slices it, which is one `gemm` per step instead of four — and is only expressible
+because slicing is differentiable.
+
+## 15. One compiled function, and why only one
 
 The library ships a `numba` extra. It compiles exactly one function, and the reasoning
 for *which* one is the interesting part.
@@ -541,15 +585,11 @@ removes interpreter overhead. Where there is no interpreter overhead to remove �
 wrapper over a C kernel — it can only add cost. Profile first, then compile the thing the
 profile names.
 
-## 15. What was left out, and why
+## 16. What was left out, and why
 
-**Differentiable indexing, `concat`, `stack`, `split`.** `Tensor.__getitem__` returns a
-raw NumPy array and drops the graph. Everything currently shipped works on whole tensors,
-so nothing needs it yet; an attention mechanism or a `Embedding` layer would.
-
-**Recurrent layers.** Backprop-through-time is the most interesting thing missing. The
-tape already handles it — the iterative topological sort exists precisely so that
-unrolled recurrences do not blow the stack — but there is no `RNNCell` to exercise it.
+**Attention, and anything that needs a full sequence layer.** `RNNCell` and `LSTMCell`
+are cells: the loop over timesteps is the caller's. A packed-sequence `RNN` layer, or
+scaled dot-product attention, would both build cleanly on what is now here.
 
 **Operator fusion, in-place operations, memory pooling.** These are where the remaining
 gap to PyTorch lives, and they are also where the code would stop being readable, which
@@ -559,7 +599,7 @@ is the point of the project.
 inspectable. Not written yet.
 
 **Operator fusion beyond `col2im`.** The JIT covers the one Python loop that was
-worth compiling (§14). Everything else is already a single NumPy call, and fusing
+worth compiling (§15). Everything else is already a single NumPy call, and fusing
 *across* calls would mean an expression compiler, which is where the code would stop
 being readable.
 

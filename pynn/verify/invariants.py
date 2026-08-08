@@ -22,7 +22,16 @@ import pynn.core.math as pmath
 import pynn.functional as F
 from pynn.core import Module, Tensor, concat, is_grad_enabled, no_grad, split
 from pynn.functional.initializers import fans, he_normal
-from pynn.nn import BatchNorm1d, Dropout, Linear, ModuleDict, ModuleList, Sequential
+from pynn.nn import (
+    BatchNorm1d,
+    Dropout,
+    Embedding,
+    Linear,
+    ModuleDict,
+    ModuleList,
+    RNNCell,
+    Sequential,
+)
 from pynn.nn.factories import activation_factory, initializer_factory
 from pynn.nn.losses import MeanSquaredError
 from pynn.optim import (
@@ -839,6 +848,34 @@ def check_modules() -> CheckReport:
         report.add(
             "a plain list of Modules is refused", "ModuleList" in str(error), str(error)
         )
+
+    # An unrolled recurrence is the graph shape the tape was built for: the same
+    # weights on the tape once per timestep, and thousands of nodes deep.
+    cell = RNNCell(3, 4)
+    step_input = Tensor(np.full((2, 3), 0.05))
+    state = cell(step_input)
+    for _ in range(299):
+        state = cell(step_input, state)
+    pmath.sum(state).backward()
+    report.add(
+        "a 300-step unrolled cell differentiates without recursion",
+        bool(np.all(np.isfinite(cell.parameters["W_hh"].grad))),
+    )
+    report.add(
+        "an unrolled cell shares one set of weights",
+        sorted(cell.named_parameters()) == ["W_hh", "W_ih", "b_hh", "b_ih"],
+        f"{sorted(cell.named_parameters())}",
+    )
+
+    # An embedding's reverse is a scatter-add. Writing instead of adding would train a
+    # frequent token as though it appeared once.
+    table = Embedding(4, 2)
+    pmath.sum(table(np.array([1, 1, 1, 3]))).backward()
+    report.add(
+        "an embedding accumulates a repeated token's gradient",
+        table.parameters["W"].grad[:, 0].tolist() == [0.0, 3.0, 0.0, 1.0],
+        f"{table.parameters['W'].grad[:, 0].tolist()}",
+    )
 
     # Running statistics are buffers, not parameters: never stepped, always saved.
     report.add(
