@@ -32,12 +32,14 @@ from pynn.nn import (
     BatchNorm2d,
     Conv2d,
     Dropout,
+    Embedding,
     Flatten,
     Linear,
+    LSTMCell,
     MaxPool2d,
     Sequential,
 )
-from pynn.nn.losses import CategoricalCrossentropy
+from pynn.nn.losses import CategoricalCrossentropy, SparseCategoricalCrossentropy
 from pynn.optim import SGD
 
 SEED = 0
@@ -82,6 +84,10 @@ def timed(step: Callable[[], None], steps: int, warmup: int) -> float:
 
 MLP_BATCH, MLP_IN, MLP_HIDDEN, MLP_OUT = 128, 784, 256, 10
 CNN_BATCH, CNN_CH, CNN_SIZE, CNN_OUT = 64, 1, 28, 10
+# A sequence model: an embedding, an LSTM cell unrolled by hand, and a head. Both
+# libraries run the *cell* in a Python loop rather than a fused sequence layer, so the
+# comparison is structural rather than PyNN against cuDNN.
+SEQ_BATCH, SEQ_LENGTH, SEQ_VOCAB, SEQ_DIM, SEQ_HIDDEN = 32, 20, 1000, 64, 128
 
 
 def pynn_mlp() -> Sequential:
@@ -200,6 +206,63 @@ def benchmark_torch(
     return Result(name, "torch", timed(step, steps, warmup=3), parameters, shape[0])
 
 
+def benchmark_pynn_sequence(name: str, steps: int) -> Result:
+    set_seed(SEED)
+    rng = np.random.default_rng(SEED)
+    tokens = rng.integers(0, SEQ_VOCAB, (SEQ_BATCH, SEQ_LENGTH))
+    targets = rng.integers(0, SEQ_VOCAB, SEQ_BATCH)
+
+    table = Embedding(SEQ_VOCAB, SEQ_DIM)
+    cell = LSTMCell(SEQ_DIM, SEQ_HIDDEN)
+    head = Linear(SEQ_HIDDEN, SEQ_VOCAB)
+    modules = [table, cell, head]
+    loss_fn = SparseCategoricalCrossentropy(logits=True)
+    optimizer = SGD([module.parameters for module in modules], learning_rate=0.01)
+
+    def step() -> None:
+        state = cell(table(tokens[:, 0]))
+        for position in range(1, SEQ_LENGTH):
+            state = cell(table(tokens[:, position]), state)
+        loss = loss_fn(targets, head(state[0]))
+        for module in modules:
+            module.zero_grad()
+        loss.backward()
+        optimizer.update()
+
+    step()  # build lazily before counting parameters
+    parameters = sum(module.num_parameters() for module in modules)
+    return Result(name, "pynn", timed(step, steps, warmup=2), parameters, SEQ_BATCH)
+
+
+def benchmark_torch_sequence(name: str, steps: int) -> Result:
+    import torch
+
+    torch.manual_seed(SEED)
+    rng = np.random.default_rng(SEED)
+    tokens = torch.tensor(rng.integers(0, SEQ_VOCAB, (SEQ_BATCH, SEQ_LENGTH)))
+    targets = torch.tensor(rng.integers(0, SEQ_VOCAB, SEQ_BATCH), dtype=torch.long)
+
+    table = torch.nn.Embedding(SEQ_VOCAB, SEQ_DIM).double()
+    cell = torch.nn.LSTMCell(SEQ_DIM, SEQ_HIDDEN).double()
+    head = torch.nn.Linear(SEQ_HIDDEN, SEQ_VOCAB).double()
+    modules = [table, cell, head]
+    parameters = [p for module in modules for p in module.parameters()]
+    optimizer = torch.optim.SGD(parameters, lr=0.01)
+    loss_fn = torch.nn.CrossEntropyLoss()
+
+    def step() -> None:
+        state = cell(table(tokens[:, 0]))
+        for position in range(1, SEQ_LENGTH):
+            state = cell(table(tokens[:, position]), state)
+        loss = loss_fn(head(state[0]), targets)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+    total = sum(p.numel() for p in parameters)
+    return Result(name, "torch", timed(step, steps, warmup=2), total, SEQ_BATCH)
+
+
 # --------------------------------------------------------------------------- #
 # Reporting
 # --------------------------------------------------------------------------- #
@@ -306,6 +369,14 @@ def main(argv: list[str] | None = None) -> int:
         # PyTorch is optional; without it the PyNN timings still stand on their own.
         with contextlib.suppress(ImportError):
             results.append(benchmark_torch(name, torch_build, shape, args.steps))
+
+    # The sequence model is built by hand rather than from a Sequential, so it does not
+    # fit the loop above.
+    sequence_name = f"LSTM {SEQ_LENGTH} steps + embedding"
+    sequence_steps = max(3, args.steps // 4)
+    results.append(benchmark_pynn_sequence(sequence_name, sequence_steps))
+    with contextlib.suppress(ImportError):
+        results.append(benchmark_torch_sequence(sequence_name, sequence_steps))
 
     print(environment())
     print()

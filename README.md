@@ -283,8 +283,9 @@ steps of forward + backward + optimizer step:
 
 | Model | Batch | Parameters | pynn ms/step | torch ms/step | Ratio | pynn examples/s |
 | --- | --- | --- | --- | --- | --- | --- |
-| MLP 784-256-256-10 | 128 | 269,322 | 3.7 | 2.2 | 1.7x | 34,192 |
-| CNN 2 conv + 2 pool | 64 | 20,522 | 78.6 | 7.8 | 10.1x | 814 |
+| MLP 784-256-256-10 | 128 | 269,322 | 4.3 | 2.3 | 1.8x | 29,636 |
+| CNN 2 conv + 2 pool | 64 | 20,522 | 82.7 | 9.7 | 8.6x | 774 |
+| LSTM 20 steps + embedding | 32 | 292,328 | 30.2 | 14.5 | 2.1x | 1,059 |
 
 *Python 3.14, NumPy 2.4, PyTorch 2.13, Apple M-series CPU. Both libraries at their own
 threading defaults, PyNN without the optional `numba` extra. Run-to-run variation is
@@ -295,13 +296,23 @@ pass — about 40% of a CNN step, and the only Python-level loop left in the lib
 takes the CNN row to **59.3 ms/step (6.5x)**. The MLP is unchanged, since it never
 touches that code.
 
-Being slower than PyTorch is the expected outcome — the interesting part is the gap
-between the two rows. The MLP is dominated by `matmul`, where both libraries hand the
-work to the same BLAS, so PyNN's overhead is the per-operation Python dispatch and it
-lands within about 2x. The CNN is where PyTorch's fused, multithreaded convolution
-kernels pull away: PyNN's `conv2d` is im2col plus a single `gemm` (a 10–100x improvement
-over the Python loop it replaced), but it still materializes the column matrix and runs
-the `col2im` scatter in the reverse pass.
+Being slower than PyTorch is the expected outcome — the interesting part is the spread
+between the rows, which is entirely about how much of each step is a C kernel rather
+than Python.
+
+The **MLP** is dominated by `matmul`, where both libraries hand the work to the same
+BLAS, so PyNN's overhead is per-operation Python dispatch and it lands within about 2x.
+
+The **CNN** is where PyTorch's fused, multithreaded convolution kernels pull away.
+PyNN's `conv2d` is im2col plus a single `gemm` — a 10–100x improvement over the Python
+loop it replaced — but it still materializes the column matrix and runs the `col2im`
+scatter in the reverse pass.
+
+The **LSTM** is the closest of the three, which is not a PyNN win so much as a level
+playing field: both libraries run the *cell* in a Python loop of 20 steps, so both pay
+per-step interpreter cost, and what remains is the same BLAS underneath. PyTorch's fused
+`nn.LSTM` would be far faster than its own `nn.LSTMCell` here; the comparison is
+deliberately cell-to-cell, since that is the same computation.
 
 ---
 
