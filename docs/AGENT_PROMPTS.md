@@ -1,8 +1,12 @@
 # Agent prompts
 
-Four independent work packages from [`TASKS.md`](../TASKS.md). Each is self-contained and
-touches a mostly disjoint set of files, so they can run in any order — or in parallel, if
-each agent works on its own branch and rebases before merging.
+Four independent work packages covering items 1-9 of [`TASKS.md`](../TASKS.md). Each is
+self-contained and touches a mostly disjoint set of files, so they can run in any order —
+or in parallel, if each agent works on its own branch and rebases before merging.
+
+Items 10-12, the sequence-modelling chain, are deliberately not covered here: they are a
+dependency chain rather than independent packages, and they are future work rather than
+queued work. They would want their own prompts, written when they are actually scheduled.
 
 Copy one prompt verbatim into a fresh agent session.
 
@@ -37,6 +41,7 @@ Every prompt below already includes this. It is repeated here so it can be edite
 > resolves to a Homebrew install without `pytest-cov`. `pynn` is installed editable.
 >
 > **Before every commit, all of these must pass:**
+>
 > ```bash
 > .venv/bin/ruff check pynn tests examples scripts benchmarks
 > .venv/bin/ruff format --check pynn tests examples scripts benchmarks
@@ -44,12 +49,14 @@ Every prompt below already includes this. It is repeated here so it can be edite
 > .venv/bin/python -m pytest -m "not external" --cov=pynn
 > .venv/bin/python -m pynn.verify
 > ```
+>
 > If you touch typing, the CLI, NumPy usage, or anything version-sensitive, also run
 > `scripts/ci_matrix.sh`, which runs every CI step against all five supported Pythons in
 > throwaway virtualenvs. Three CI failures have already come from behaviour the newest
 > interpreter cannot reproduce.
 >
 > **House style.**
+>
 > - Match the surrounding code: NumPy-style docstrings, comments that explain *why* and
 >   what breaks otherwise, never *what* the line does.
 > - **Any new differentiable operation must be added to
@@ -166,9 +173,6 @@ already contains measurements you should not re-derive from scratch, only extend
    of value:
      - Unflatten / Reshape as the inverse of Flatten, and Identity as a layer. Small, and
        they complete an obvious gap.
-     - A packed-sequence RNN / LSTM layer wrapping the existing cells, so a caller who
-       does not need a custom loop does not have to write one. The cells are deliberately
-       loop-free; this is the convenience layer over them.
      - KLDivLoss and HingeLoss, using the shared _reduce helper in
        pynn/functional/losses.py so the three reduction modes stay consistent.
      - NAdam, ReduceLROnPlateau, OneCycleLR.

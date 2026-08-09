@@ -4,8 +4,9 @@ Work that is queued but not scheduled. Nothing here is a correctness bug — the
 is green on Python 3.10–3.14 with 767 tests, 332 verification checks, and 98% coverage.
 
 Everything structural is done — the last item of that kind, differentiable indexing, is
-what unblocked the recurrent cells. What remains is independent and can be picked up in
-any order or dropped.
+what unblocked the recurrent cells. Items 1-9 are independent and can be picked up in any
+order or dropped; the sequence-modelling section at the end is a dependency chain, and is
+future work rather than queued work.
 
 ---
 
@@ -60,7 +61,7 @@ Each is small and independent; this is the pile to draw from when time is short.
 | Losses | `KLDivLoss`, `HingeLoss` |
 | Optimizers | `NAdam` |
 | Schedules | `ReduceLROnPlateau`, `OneCycleLR`, warmup |
-| Layers | `ConvTranspose2d` (enables an autoencoder example), `Unflatten` as the inverse of `Flatten`, `Identity` as a layer, a packed-sequence `RNN`/`LSTM` layer over the cells, scaled dot-product attention |
+| Layers | `ConvTranspose2d` (enables an autoencoder example), `Unflatten` as the inverse of `Flatten`, `Identity` as a layer |
 | Metrics | a `pynn.metrics` module: accuracy, precision / recall / F1, confusion matrix, MSE / MAE / R² |
 
 ### 8. Further acceleration, in measured order
@@ -116,6 +117,109 @@ A char-level RNN on a small text file, or an MLP autoencoder on MNIST with a
 reconstruction grid. Shows the library generalizes past classification. Everything the
 recurrent version needs is now in place — `Embedding`, `LSTMCell`, differentiable
 slicing, and `SparseCategoricalCrossentropy` — so this is mostly a notebook and a corpus.
+
+---
+
+## Sequence modelling
+
+A dependency chain rather than a pile: each item is buildable once the one above it
+exists, and the whole of it is buildable on the autodiff engine as it stands today.
+
+**Nothing here needs a new autodiff primitive.** That was checked rather than assumed —
+batched 4-D `matmul`, `softmax` over any axis, `transpose(axes)`, `reshape`, `concat` /
+`stack` / `split`, and differentiable indexing are all in place, and gradients flow
+through a full scaled-dot-product attention built from them. The one convenience that is
+missing is a differentiable `where` / `masked_fill`; an additive `-1e9` mask before the
+softmax does the same job with existing operations, which is how PyTorch's own
+functional attention accepts masks anyway.
+
+### 10. Fused recurrent layers
+
+`RNNCell`, `LSTMCell`, and a `GRUCell` are the primitives; these are the layers that own
+the loop, so a caller who does not need a custom one does not have to write it.
+
+- **`GRUCell` first**, since it does not exist yet. Three gates rather than four:
+
+  ```
+  r = sigmoid(x @ W_ir + h @ W_hr + b)          reset
+  z = sigmoid(x @ W_iz + h @ W_hz + b)          update
+  n = tanh(x @ W_in + r * (h @ W_hn + b_hn))    candidate
+  h' = (1 - z) * n + z * h
+  ```
+
+  Note where the reset gate goes. `LSTMCell` computes one `4 * hidden` block and slices
+  it, because every gate consumes the same `x @ W_ih + h @ W_hh` sum. A GRU cannot do
+  that: `r` multiplies the **hidden** projection only, before it is added to the input
+  projection. So compute `x @ W_ih` and `h @ W_hh` as two `3 * hidden` blocks and split
+  each — two gemms, not one, and not six. Getting this wrong produces a cell that trains
+  and is simply not a GRU.
+
+- **`RNN`, `LSTM`, `GRU` sequence layers** wrapping their cells. Return
+  `(outputs, final_state)` where `outputs` is every timestep's hidden state stacked —
+  `stack` already does this differentiably. Support `num_layers` (feed one layer's
+  outputs to the next), `batch_first`, and dropout *between* layers but not after the
+  last, matching PyTorch.
+
+- **Bidirectional.** Run the sequence forward, run it again over the reversed sequence,
+  and `concat` the two along the feature axis, so the output width is `2 * hidden_size`.
+  Reversing is `x[:, ::-1]` — differentiable since indexing is. The reverse pass's
+  outputs must be flipped back before concatenating, or timestep *t* of the backward
+  direction lines up with timestep *T-t* of the forward one. That off-by-reversal is
+  invisible in the shapes and shows up only as a model that will not learn.
+
+- **Variable-length sequences.** A padding mask, applied so that padded steps neither
+  contribute to the loss nor advance the hidden state. The alternative — PyTorch's
+  packed-sequence representation — is more efficient and much more machinery; a mask is
+  the right first version, and the docstring should say which was chosen and why.
+
+- Gradcheck entries for `GRUCell` unrolled 1 and 4 steps, matching the existing
+  `RNNCell` / `LSTMCell` cases, plus one bidirectional case. An invariant asserting that
+  a bidirectional layer's two directions see the sequence in opposite orders.
+
+### 11. Attention
+
+- **`scaled_dot_product_attention(q, k, v, mask=None)`** in `pynn/functional/`:
+  `softmax(q @ k.T / sqrt(d)) @ v`. Verified expressible today; the work is the API, the
+  masking, and the tests.
+- **`MultiHeadAttention`** as a Module: project Q, K, V, reshape to
+  `(batch, heads, time, head_dim)`, attend, merge back, project out. The split and merge
+  are `reshape` + `transpose(axes)`, which round-trip correctly today.
+- **Masking.** Support both a causal mask and a padding mask, and take them as additive
+  masks so no new primitive is needed. Consider adding a differentiable `where` /
+  `masked_fill` anyway — it reads better at the call site and is a small op.
+- **Self- versus cross-attention** falls out of letting `k` and `v` differ from `q`.
+- Gradcheck entries with and without a mask, and one where the same tensor is passed as
+  all three of Q, K, and V — self-attention is the case where one input has three
+  consumers, which is exactly the shape a reverse pass that overwrites gets wrong.
+
+### 12. Transformer
+
+- **`TransformerEncoderLayer`**: multi-head self-attention, residual, `LayerNorm`,
+  position-wise feed-forward (two `Linear` layers with `GELU` between them), residual,
+  `LayerNorm`. Every piece already exists. Offer pre-norm as well as post-norm and say
+  which is the default and why — pre-norm trains without a warmup schedule, which matters
+  a great deal at this scale.
+- **`TransformerEncoder`**: `num_layers` of the above in a `ModuleList`.
+- **Positional encoding**: sinusoidal (no parameters) and learned (an `Embedding`).
+  Both are cheap; ship both.
+- **`TransformerDecoderLayer` / `TransformerDecoder`** with causal masking and
+  cross-attention, if a generative example is wanted.
+- **An example** is what makes this worth having: a small character-level or
+  toy-translation transformer, in the shape of `examples/mnist.ipynb`. Item 9's char-RNN
+  notebook would make a natural companion — the same task, two architectures, honestly
+  compared.
+
+### Scope note
+
+This is a large body of work and the library does not need it to be complete or
+defensible. It is here because it is the natural extension of what already exists, and
+because "the autodiff engine is general enough that a transformer is a composition of
+what is already in it, not a rewrite" is a claim worth being able to demonstrate rather
+than assert.
+
+If only part of it is ever built, **item 11 is the one to build**: attention is the
+single most-asked-about architecture, and it is roughly a hundred lines on top of what
+is already here.
 
 ---
 
