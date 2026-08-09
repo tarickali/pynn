@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 
 import pynn.core.math as pmath
-from pynn.core import Tensor, concat, split, stack
+from pynn.core import Tensor, concat, masked_fill, split, stack, where
 
 
 @pytest.fixture
@@ -265,3 +265,117 @@ def test_split_then_concat_is_the_identity():
 def test_split_rejects_impossible_requests(sections, message):
     with pytest.raises(ValueError, match=message):
         split(Tensor(np.ones((6, 2))), sections)
+
+
+# --------------------------------------------------------------------------- #
+# where and masked_fill
+#
+# The reverse pass routes rather than transforms: each element of the incoming gradient
+# belongs to exactly one input, and the other gets zero there. The cases that matter are
+# the ones where "exactly one" is not obvious — a broadcast branch, a scalar branch, and
+# the same tensor on both sides.
+# --------------------------------------------------------------------------- #
+
+
+def test_where_selects_per_element():
+    values = Tensor(np.array([-1.0, 2.0, -3.0, 4.0]))
+    other = Tensor(np.array([10.0, 20.0, 30.0, 40.0]))
+
+    assert where(values.data > 0, values, other).data.tolist() == [10.0, 2.0, 30.0, 4.0]
+
+
+def test_where_routes_each_element_to_one_branch():
+    a = Tensor(np.ones(4))
+    b = Tensor(np.ones(4))
+    mask = np.array([True, False, True, False])
+
+    pmath.sum(where(mask, a, b)).backward()
+
+    assert a.grad.tolist() == [1.0, 0.0, 1.0, 0.0]
+    assert b.grad.tolist() == [0.0, 1.0, 0.0, 1.0]
+    assert (a.grad + b.grad).tolist() == [1.0] * 4, "every element goes somewhere"
+
+
+def test_where_accepts_a_scalar_branch():
+    values = Tensor(np.array([1.0, 2.0]))
+
+    result = where(np.array([True, False]), values, 0.0)
+    pmath.sum(result).backward()
+
+    assert result.data.tolist() == [1.0, 0.0]
+    assert values.grad.tolist() == [1.0, 0.0]
+
+
+def test_where_unbroadcasts_a_lower_rank_branch():
+    """A replicated branch's gradient is a sum over the axes it was copied along."""
+    row = Tensor(np.zeros(3))
+    mask = np.array([[True, False, True], [False, False, True]])
+
+    pmath.sum(where(mask, Tensor(np.zeros((2, 3))), row)).backward()
+
+    assert row.grad.tolist() == [1.0, 2.0, 0.0]
+
+
+def test_where_with_the_same_tensor_in_both_branches():
+    """One tensor, two consumers: the halves must sum to the whole gradient."""
+    values = Tensor(np.ones(4))
+
+    pmath.sum(where(np.array([True, False, True, False]), values, values)).backward()
+
+    assert values.grad.tolist() == [1.0] * 4
+
+
+def test_where_accepts_a_tensor_condition():
+    values = Tensor(np.array([1.0, 2.0]))
+    condition = Tensor(np.array([True, False]), dtype=bool)
+
+    assert where(condition, values, 0.0).data.tolist() == [1.0, 0.0]
+
+
+def test_where_rejects_an_unconvertible_branch():
+    with pytest.raises(TypeError, match="Cannot perform operation"):
+        where(np.array([True]), Tensor(np.ones(1)), "nope")
+
+
+def test_masked_fill_replaces_marked_positions():
+    values = Tensor(np.array([1.0, 2.0, 3.0]))
+
+    filled = masked_fill(values, np.array([False, True, False]), -9.0)
+
+    assert filled.data.tolist() == [1.0, -9.0, 3.0]
+
+
+def test_a_filled_position_gets_exactly_zero_gradient():
+    """It was overwritten, not scaled, so it had no influence on the output."""
+    values = Tensor(np.array([1.0, 2.0, 3.0]))
+
+    pmath.sum(masked_fill(values, np.array([False, True, False]), -9.0)).backward()
+
+    assert values.grad.tolist() == [1.0, 0.0, 1.0]
+
+
+def test_masked_fill_keeps_the_constant_off_the_tape():
+    """`where(mask, value, x)` would make the constant a leaf holding a gradient."""
+    values = Tensor(np.array([1.0, 2.0]))
+
+    filled = masked_fill(values, np.array([True, False]), -1e9)
+
+    assert len(filled.children) == 1
+    assert filled.children[0] is values
+
+
+def test_masked_fill_drives_a_causal_attention_mask():
+    """The case it exists for: each position sees only itself and the past."""
+    import pynn.functional as F
+
+    scores = Tensor(np.zeros((1, 4, 4)))
+    future = np.triu(np.ones((4, 4), dtype=bool), k=1)
+
+    weights = F.softmax(masked_fill(scores, future, -1e9), axis=-1)
+
+    assert np.allclose(weights.data[0, 0], [1.0, 0.0, 0.0, 0.0])
+    assert np.allclose(weights.data[0, 3], [0.25, 0.25, 0.25, 0.25])
+    assert np.allclose(weights.data.sum(axis=-1), 1.0)
+
+    pmath.sum(weights).backward()
+    assert np.all(scores.grad[0][future] == 0.0)

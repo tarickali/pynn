@@ -8,7 +8,7 @@
 **PyNN** is a small, NumPy-based neural network library with automatic differentiation. It provides a PyTorch-like API for building and training feedforward and convolutional models from scratch, with no dependency on PyTorch or TensorFlow.
 
 Every differentiable operation is checked against central-difference numerical gradients
-— 201 checks, including branching graph topologies — and the design decisions behind the
+— 209 checks, including branching graph topologies — and the design decisions behind the
 tape are written up in [`docs/DESIGN.md`](docs/DESIGN.md).
 
 ---
@@ -19,7 +19,7 @@ tape are written up in [`docs/DESIGN.md`](docs/DESIGN.md).
 - **Layers** — `Linear`, `Conv2d`, `MaxPool2d`, `AvgPool2d`, `Dropout`, `LayerNorm`, `BatchNorm1d`/`BatchNorm2d`, `Embedding`, `RNNCell`, `LSTMCell`, `Flatten`, and a generic `Activation` wrapper. `Sequential` is itself a `Module`, so containers nest; `ModuleList` and `ModuleDict` hold layers whose wiring you decide.
 - **Module tree** — recursive `named_parameters()`, `state_dict()`/`load_state_dict()`, `save`/`load`, `train()`/`eval()` mode propagation, and `freeze()`/`unfreeze()` that the optimizers honor. Assigning a plain list of layers to an attribute raises rather than silently leaving them untrained.
 - **Autodiff controls** — `no_grad()` for inference that builds no graph, `Tensor.detach()`, and `requires_grad` tracking.
-- **Differentiable indexing** — slicing, gathering, and boolean masks stay on the tape, alongside `concat` / `stack` / `split` and `Tensor.reshape`. Backpropagation through time works because of it: `backward` uses an explicit stack, so a 300-step unrolled cell differentiates without touching the recursion limit.
+- **Differentiable indexing** — slicing, gathering, and boolean masks stay on the tape, alongside `concat` / `stack` / `split`, `where` / `masked_fill`, and `Tensor.reshape`. Backpropagation through time works because of it: `backward` uses an explicit stack, so a 300-step unrolled cell differentiates without touching the recursion limit.
 - **Activations** — Identity, ReLU (and LeakyReLU), Sigmoid, Tanh, Softmax and LogSoftmax (with configurable axis), ELU, SELU, GELU (exact and tanh), SiLU/Swish, SoftPlus, Affine, and PReLU — a *learnable* activation, which is a `Module` so its slope reaches the optimizer.
 - **Losses** — Binary and categorical cross-entropy (logits or probabilities, one-hot or integer labels), mean squared error, mean absolute error, and Huber/SmoothL1. Every loss takes `reduction='mean' | 'sum' | 'none'`.
 - **Optimizers** — SGD (momentum, weight decay, Nesterov), Adam, AdamW (decoupled decay), RMSprop, Adagrad, Adadelta, with standard hyperparameters. Plus `StepLR` / `ExponentialLR` / `CosineAnnealingLR` schedules and `clip_grad_norm`.
@@ -91,7 +91,7 @@ optimizer.update()
 
 | Area | Contents |
 | ------ | ---------- |
-| **`pynn.core`** | `Tensor` (autograd), `Module` (the layer/container tree), `Loss`, `Optimizer`, `Activation`, `Initializer`, `no_grad` / `enable_grad` / `set_grad_enabled`, `concat` / `stack` / `split`, types, constants. |
+| **`pynn.core`** | `Tensor` (autograd), `Module` (the layer/container tree), `Loss`, `Optimizer`, `Activation`, `Initializer`, `no_grad` / `enable_grad` / `set_grad_enabled`, `concat` / `stack` / `split`, `where` / `masked_fill`, types, constants. |
 | **`pynn.core.math`** | `abs`, `sum`, `mean`, `exp`, `log` (import as a module — these shadow builtins). |
 | **`pynn.core.utils`** | `unbroadcast`, `matrix_multiply_gradients` (backward-pass shape plumbing). |
 | **`pynn.core.numeric`** | `stable_sigmoid` (overflow-free kernel shared by the activations and losses). |
@@ -229,11 +229,11 @@ python -m pynn.verify stability    # one suite
 ```
 
 ```
-gradients: 201/201 passed (OK)
+gradients: 209/209 passed (OK)
 invariants: 107/107 passed (OK)
 stability: 24/24 passed (OK)
 
-pynn.verify: 332/332 passed (OK)
+pynn.verify: 340/340 passed (OK)
 ```
 
 Three suites:

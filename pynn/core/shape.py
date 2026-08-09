@@ -1,10 +1,12 @@
-"""Shape operations that stay on the tape.
+"""Operations whose reverse pass routes a gradient rather than transforms it.
 
-Joining and splitting tensors is where a graph stops being a chain. `concat` has several
-inputs and one output; `split` has one input and several outputs, each of which gets its
-own gradient that has to land back in the right slice of the same tensor. Both are the
-shapes a reverse pass gets wrong quietly — the result has the right dimensions either
-way, and only the gradient is off.
+Everything here moves values around without doing arithmetic on them, so the interesting
+half is always the backward direction: which input each piece of the incoming gradient
+belongs to. `concat` has several inputs and one output, `split` has one input and
+several outputs, and `where` decides per element. All three produce correctly-shaped
+results with a wrong reverse pass, which is why the gradient sweep checks a tensor
+concatenated with itself, a split with an unused piece, and a `where` whose branches are
+the same tensor.
 """
 
 from __future__ import annotations
@@ -13,9 +15,11 @@ from collections.abc import Sequence
 
 import numpy as np
 
-from pynn.core.tensor import Tensor
+from pynn.core.tensor import Tensor, convert_tensor_input
+from pynn.core.types import Array, ArrayLike
+from pynn.core.utils import unbroadcast
 
-__all__ = ["concat", "split", "stack"]
+__all__ = ["concat", "masked_fill", "split", "stack", "where"]
 
 
 def _axis_index(axis: int, position: slice | int, ndim: int) -> tuple:
@@ -202,3 +206,116 @@ def split(
         offset += size
 
     return tuple(pieces)
+
+
+def where(
+    condition: Array | Tensor,
+    x: Tensor | ArrayLike,
+    y: Tensor | ArrayLike,
+) -> Tensor:
+    """Select from `x` where `condition` holds and from `y` where it does not.
+
+    The reverse pass routes rather than transforms: each element of the incoming
+    gradient goes to exactly one of the two inputs, and the other receives zero there.
+    That is the same job `concat` and `split` do along an axis, decided per element.
+
+    `condition` is data, not a differentiable input — a boolean has no useful
+    derivative, and the gradient with respect to it is zero wherever it is defined.
+
+    Parameters
+    ----------
+    condition : Array | Tensor
+        Boolean selector. Broadcast against `x` and `y`.
+    x, y : Tensor | ArrayLike
+        Values taken where `condition` is true and false respectively. Either may be a
+        scalar.
+
+    Returns
+    -------
+    Tensor
+        Broadcast shape of the three arguments.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> x = Tensor(np.array([-1.0, 2.0, -3.0]))
+    >>> where(x.data > 0, x, 0.0).data.tolist()
+    [0.0, 2.0, 0.0]
+
+    Notes
+    -----
+    Several operations — `relu`, `elu`, `selu`, `prelu`, `huber` — use `np.where`
+    internally on raw arrays with a hand-written reverse rather than composing this.
+    That is deliberate: a fused reverse for a known condition is one pass, where
+    composing would allocate both branches and route a gradient through each.
+    """
+    mask = np.asarray(
+        condition.data if isinstance(condition, Tensor) else condition, dtype=bool
+    )
+    x = convert_tensor_input(x)
+    y = convert_tensor_input(y)
+
+    output = Tensor(np.where(mask, x.data, y.data))
+    output.add_children((x, y))
+
+    def reverse() -> None:
+        # unbroadcast, because a scalar or a lower-rank branch was replicated to the
+        # output shape, and the gradient of a copy is a sum.
+        x.grad += unbroadcast(np.where(mask, output.grad, 0.0), x.shape)
+        y.grad += unbroadcast(np.where(mask, 0.0, output.grad), y.shape)
+
+    output.forward = "where"
+    output.reverse = reverse
+
+    return output
+
+
+def masked_fill(x: Tensor, mask: Array | Tensor, value: float) -> Tensor:
+    """Replace elements of `x` where `mask` holds with the constant `value`.
+
+    `where(mask, value, x)` with the constant kept off the tape. That matters for the
+    case this exists for — attention masks — where `value` is a large negative number
+    the softmax is meant to send to zero, and making it a graph node would give it a
+    gradient nobody reads.
+
+    A replaced element is overwritten, not scaled, so its gradient is exactly zero: it
+    had no influence on the output.
+
+    Parameters
+    ----------
+    x : Tensor
+        Values to fill into.
+    mask : Array | Tensor
+        Boolean, broadcast against `x`. True marks positions to replace.
+    value : float
+        Constant written where `mask` holds.
+
+    Returns
+    -------
+    Tensor
+        Broadcast shape of `x` and `mask`.
+
+    Examples
+    --------
+    Causal self-attention, masking each position's view of the future:
+
+    >>> import numpy as np
+    >>> import pynn.functional as F
+    >>> scores = Tensor(np.zeros((1, 4, 4)))
+    >>> future = np.triu(np.ones((4, 4), dtype=bool), k=1)
+    >>> weights = F.softmax(masked_fill(scores, future, -1e9), axis=-1)
+    >>> weights.data[0, 0].round(3).tolist()
+    [1.0, 0.0, 0.0, 0.0]
+    """
+    selector = np.asarray(mask.data if isinstance(mask, Tensor) else mask, dtype=bool)
+
+    output = Tensor(np.where(selector, value, x.data))
+    output.add_children((x,))
+
+    def reverse() -> None:
+        x.grad += unbroadcast(np.where(selector, 0.0, output.grad), x.shape)
+
+    output.forward = "masked_fill"
+    output.reverse = reverse
+
+    return output

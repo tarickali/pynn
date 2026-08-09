@@ -11,7 +11,7 @@ from .initializer import Initializer
 from .loss import Loss
 from .module import Module
 from .optimizer import Optimizer
-from .shape import concat, split, stack
+from .shape import concat, masked_fill, split, stack, where
 from .tensor import Tensor
 from .types import Array, ArrayLike, DataType, List, Number, Shape
 
@@ -36,8 +36,10 @@ __all__ = [
     "concat",
     "enable_grad",
     "is_grad_enabled",
+    "masked_fill",
     "no_grad",
     "set_grad_enabled",
     "split",
     "stack",
+    "where",
 ]

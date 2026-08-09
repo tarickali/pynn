@@ -523,6 +523,26 @@ indexing pays for `np.add.at`.
 tensor. Both produce correctly-shaped results with a wrong reverse pass, which is why the
 sweep checks a tensor concatenated *with itself* and a split with an *unused* piece.
 
+`where` and `masked_fill` are the same family decided per element rather than per axis.
+They live beside those two in `pynn/core/shape.py` because what they have in common is
+the interesting part: none of them does arithmetic, so the whole of each is the question
+of *which input each piece of the incoming gradient belongs to*.
+
+`masked_fill` keeps its constant off the tape rather than being `where(mask, value, x)`,
+which matters for the case it exists for. An attention mask fills with a large negative
+number the softmax is meant to send to zero; making that a graph node would give it a
+gradient nobody reads. And because a filled position is *overwritten* rather than scaled,
+its gradient is exactly zero — which is what a mask should mean, and is checked directly:
+
+```python
+weights = softmax(masked_fill(scores, future, -1e9), axis=-1)
+```
+
+Several operations — `relu`, `elu`, `selu`, `prelu`, `huber` — use `np.where` internally
+on raw arrays with a hand-written reverse rather than composing `where`. That is
+deliberate. A fused reverse for a condition known at write time is one pass; composing
+would allocate both branches and route a gradient through each.
+
 ### What this unblocked
 
 A recurrent cell applies **the same weights at every timestep**. Unrolled over 30 steps,

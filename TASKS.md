@@ -127,11 +127,10 @@ exists, and the whole of it is buildable on the autodiff engine as it stands tod
 
 **Nothing here needs a new autodiff primitive.** That was checked rather than assumed —
 batched 4-D `matmul`, `softmax` over any axis, `transpose(axes)`, `reshape`, `concat` /
-`stack` / `split`, and differentiable indexing are all in place, and gradients flow
-through a full scaled-dot-product attention built from them. The one convenience that is
-missing is a differentiable `where` / `masked_fill`; an additive `-1e9` mask before the
-softmax does the same job with existing operations, which is how PyTorch's own
-functional attention accepts masks anyway.
+`stack` / `split`, differentiable indexing, and `where` / `masked_fill` are all in place,
+and gradients flow through a full scaled-dot-product attention built from them. A causal
+mask is `masked_fill(scores, future, -1e9)` ahead of the softmax, and the filled
+positions come back with exactly zero gradient.
 
 ### 10. Fused recurrent layers
 
@@ -184,9 +183,9 @@ the loop, so a caller who does not need a custom one does not have to write it.
 - **`MultiHeadAttention`** as a Module: project Q, K, V, reshape to
   `(batch, heads, time, head_dim)`, attend, merge back, project out. The split and merge
   are `reshape` + `transpose(axes)`, which round-trip correctly today.
-- **Masking.** Support both a causal mask and a padding mask, and take them as additive
-  masks so no new primitive is needed. Consider adding a differentiable `where` /
-  `masked_fill` anyway — it reads better at the call site and is a small op.
+- **Masking.** Support both a causal mask and a padding mask. `masked_fill` already
+  exists and is the intended tool: a filled position is overwritten rather than scaled,
+  so it receives exactly zero gradient, which is what a mask should mean.
 - **Self- versus cross-attention** falls out of letting `k` and `v` differ from `q`.
 - Gradcheck entries with and without a mask, and one where the same tensor is passed as
   all three of Q, K, and V — self-attention is the case where one input has three

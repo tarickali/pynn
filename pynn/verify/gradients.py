@@ -4,7 +4,7 @@ The functions here compare the gradients produced by reverse-mode autodiff again
 central-difference approximations. They are part of the public API so that users can
 verify custom layers and operations, not just the ones shipped with the library:
 
-    from pynn.core import Tensor, concat, split, stack
+    from pynn.core import Tensor, concat, masked_fill, split, stack, where
     from pynn.verify import check_gradients
 
     result = check_gradients(lambda ts: my_loss(ts[0]), [Tensor(x)])
@@ -23,7 +23,7 @@ import numpy as np
 
 import pynn.core.math as pmath
 import pynn.functional as F
-from pynn.core import Tensor, concat, split, stack
+from pynn.core import Tensor, concat, masked_fill, split, stack, where
 from pynn.core.types import Array
 from pynn.functional.losses import (
     binary_crossentropy,
@@ -992,6 +992,62 @@ def gradient_cases(seed: int = DEFAULT_SEED) -> list[GradientCase]:
             "split uneven sizes",
             lambda ts: pmath.sum(concat(list(split(ts[0], [1, 3, 2]))) * ts[1]),
             [normal(6, 2), normal(6, 2)],
+        ),
+    ]
+
+    # where and masked_fill route the gradient per element rather than transforming it.
+    # The reused-branch case is the one that matters: `where(c, x, x)` gives one tensor
+    # two consumers, and the two halves have to sum to the whole gradient.
+    selector = rng.random((4, 4)) > 0.5
+    cases += [
+        (
+            "where",
+            lambda ts: pmath.sum(where(selector, ts[0], ts[1]) * ts[2]),
+            [normal(4, 4), normal(4, 4), normal(4, 4)],
+        ),
+        (
+            "where against a scalar",
+            lambda ts: pmath.sum(where(selector, ts[0], 0.0) * ts[1]),
+            [normal(4, 4), normal(4, 4)],
+        ),
+        (
+            "where broadcasting a row",
+            lambda ts: pmath.sum(where(selector, ts[0], ts[1]) * ts[2]),
+            [normal(4, 4), normal(4), normal(4, 4)],
+        ),
+        (
+            "where with the same tensor in both branches",
+            lambda ts: pmath.sum(where(selector, ts[0], ts[0]) * ts[1]),
+            [normal(4, 4), normal(4, 4)],
+        ),
+        (
+            "where with a reused input",
+            lambda ts: (
+                pmath.sum(where(selector, ts[0], ts[1])) + pmath.sum(ts[0] * ts[2])
+            ),
+            [normal(4, 4), normal(4, 4), normal(4, 4)],
+        ),
+        (
+            "masked_fill",
+            lambda ts: pmath.sum(masked_fill(ts[0], selector, -1.0) * ts[1]),
+            [normal(4, 4), normal(4, 4)],
+        ),
+        # The case it exists for: a causal mask ahead of a softmax. A filled position is
+        # overwritten rather than scaled, so its gradient is exactly zero.
+        (
+            "masked_fill into a causal softmax",
+            lambda ts: pmath.sum(
+                F.softmax(masked_fill(ts[0], np.triu(np.ones((4, 4), bool), 1), -1e9))
+                * ts[1]
+            ),
+            [normal(4, 4), normal(4, 4)],
+        ),
+        (
+            "masked_fill with a reused input",
+            lambda ts: (
+                pmath.sum(masked_fill(ts[0], selector, 0.5)) + pmath.sum(ts[0] * ts[1])
+            ),
+            [normal(4, 4), normal(4, 4)],
         ),
     ]
 
