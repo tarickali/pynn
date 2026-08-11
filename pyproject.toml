@@ -4,7 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pynn"
-version = "0.1.0"
+# Read from `pynn.__version__` (see [tool.setuptools.dynamic]) rather than written
+# here, so the number exists in exactly one place. The other direction — a literal
+# here and `importlib.metadata.version("pynn")` in the package — needs a fallback for
+# a source tree that was never installed, and that fallback is a second literal that
+# drifts the moment someone bumps one and not the other.
+dynamic = ["version"]
 description = "A NumPy-based neural network library with automatic differentiation and a PyTorch-like API."
 readme = "README.md"
 license = { text = "Apache-2.0" }
@@ -84,14 +89,36 @@ external = [
 numba = [
     "numba>=0.57",
 ]
+# Building a wheel and an sdist, and checking them before an upload. Floors rather than
+# pins: neither tool gates CI, and neither one rewrites the tree.
+release = [
+    "build>=1.0",
+    "twine>=5.0",
+]
 # Everything needed to run every part of the repository, on any supported Python.
 all = [
-    "pynn[dev,examples,mnist,notebook,benchmark]",
+    "pynn[dev,examples,mnist,notebook,benchmark,release]",
 ]
+
+[tool.setuptools.dynamic]
+# setuptools reads this attribute *statically*, by parsing the module's AST rather than
+# importing it. That is what makes it safe here: a build runs in an isolated
+# environment where numpy is absent, and `import pynn` pulls numpy in through
+# `pynn.core`. Keep `__version__` a plain string literal — anything computed forces
+# setuptools to fall back to importing the package, and the build fails on a machine
+# that has no numpy.
+version = { attr = "pynn.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["pynn*"]
+
+[tool.setuptools.package-data]
+# PEP 561: a type checker in a consuming project ignores an installed package's
+# annotations unless it finds this marker, so without the entry below the library ships
+# fully annotated and reads as untyped to everyone who installs it. Only the top-level
+# package needs it; the marker covers the subpackages.
+pynn = ["py.typed"]
 
 [tool.ruff]
 # Pinned explicitly: ruff's default rule set varies between releases, so relying on it

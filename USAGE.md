@@ -35,7 +35,7 @@ Three files cover the three situations anyone is actually in:
 | File | Installs | For |
 | --- | --- | --- |
 | `requirements.txt` | the library, NumPy only | running `pynn`, `python -m pynn.verify` |
-| `requirements-dev.txt` | + tests, lint, types, examples, notebook, benchmarks | working on the repository |
+| `requirements-dev.txt` | + tests, lint, types, examples, notebook, benchmarks, release tooling | working on the repository |
 | `requirements-external.txt` | + torch, tensorflow | the `external`-marked comparison tests |
 
 Finer control lives in `pyproject.toml`, which declares the extras those files point at
@@ -48,6 +48,7 @@ pip install -e ".[mnist]"      # + pandas
 pip install -e ".[notebook]"   # matplotlib, jupyterlab, ipykernel, nbclient
 pip install -e ".[benchmark]"  # torch
 pip install -e ".[numba]"      # compiles the convolution backward pass
+pip install -e ".[release]"    # build, twine — see section 11
 ```
 
 **Two groups sit outside `requirements-dev.txt` on purpose:**
@@ -64,8 +65,9 @@ pip install -e ".[numba]"      # compiles the convolution backward pass
 ### Check it worked
 
 ```bash
-python -c "import pynn; print(pynn.__file__)"   # works from any directory
-python -m pynn.verify                           # 340/340 passed (OK)
+python -c "import pynn; print(pynn.__file__)"       # works from any directory
+python -c "import pynn; print(pynn.__version__)"    # 0.1.0
+python -m pynn.verify                               # 340/340 passed (OK)
 ```
 
 `requirements-dev.txt` installs the library in editable mode, so `pynn` imports from
@@ -82,7 +84,10 @@ pytest --cov=pynn                   # + coverage, enforces the 95% floor
 pytest --cov=pynn --cov-report=term-missing   # + which lines are uncovered
 ```
 
-**Expected:** `786 passed, 1 skipped, 6 deselected` · `Total coverage: ~98.3%`
+**Expected:** `790 passed, 1 skipped, 6 deselected` · `Total coverage: ~98.3%`
+
+On Python 3.10 it is `788 passed, 3 skipped`: two of the packaging checks parse
+`pyproject.toml`, and `tomllib` is standard library only from 3.11.
 
 Narrower runs:
 
@@ -371,6 +376,82 @@ second one would upload the same report twice.
 
 ---
 
+## 11. Building and publishing
+
+```bash
+pip install -e ".[release]"
+rm -rf dist/                  # twine uploads everything it is handed, stale files included
+python -m build               # writes dist/pynn-<version>-py3-none-any.whl and .tar.gz
+twine check dist/*
+```
+
+**Expected:** `Successfully built pynn-0.1.0.tar.gz and pynn-0.1.0-py3-none-any.whl`,
+then `PASSED` for both artifacts. `dist/` and `build/` are gitignored.
+
+`twine check` renders the README the way PyPI will and fails on markup PyPI would
+reject — the failure mode it exists for is a project page that shows raw markup, which
+is only visible after the upload it is too late to take back.
+
+### The version
+
+Written in exactly one place, `pynn/__init__.py`:
+
+```python
+__version__ = "0.1.0"
+```
+
+`pyproject.toml` carries `dynamic = ["version"]` and reads that attribute, so a release
+is a single edit and there is no second literal to disagree with it. Keep it a plain
+string: setuptools parses the file rather than importing it, and importing it would
+need NumPy, which an isolated build environment does not have.
+
+`tests/test_packaging.py` asserts the attribute and the installed distribution's
+metadata agree, so a bump that was never reinstalled fails a test rather than shipping.
+
+### The type marker
+
+`pynn/py.typed` is [PEP 561](https://peps.python.org/pep-0561/)'s marker. Without it a
+type checker in a consuming project ignores this library's annotations entirely and
+reports it as untyped — the library is fully annotated and none of it is visible. It is
+listed under `[tool.setuptools.package-data]` because setuptools ships `.py` files and
+nothing else on its own, so a marker that exists in the repository and is not declared
+there is absent from every wheel built from it.
+
+Confirm it survived a build rather than assuming it did:
+
+```bash
+python -m zipfile -l dist/pynn-0.1.0-py3-none-any.whl | grep py.typed
+```
+
+### TestPyPI
+
+**Nothing has been uploaded.** Publishing is a deliberate act — a version number on an
+index can never be reused, even after a delete — so the command lives here rather than
+in a script or a CI job.
+
+```bash
+python -m twine upload --repository testpypi dist/*
+```
+
+It needs an API token from [test.pypi.org](https://test.pypi.org/manage/account/token/),
+either in `~/.pypirc` under a `[testpypi]` section or as `TWINE_USERNAME=__token__` and
+`TWINE_PASSWORD=pypi-...` in the environment.
+
+Then install it back into a throwaway environment, which is the part that actually
+proves the packaging:
+
+```bash
+python -m venv /tmp/pynn-check && /tmp/pynn-check/bin/pip install \
+  --index-url https://test.pypi.org/simple/ \
+  --extra-index-url https://pypi.org/simple/ pynn
+/tmp/pynn-check/bin/python -m pynn.verify
+```
+
+The `--extra-index-url` is not optional: TestPyPI is a separate index and NumPy is not
+reliably on it, so without a fallback the dependency fails to resolve.
+
+---
+
 ## Quick reference
 
 | Task | Command |
@@ -383,6 +464,7 @@ second one would upload the same report twice.
 | Types | `mypy` |
 | Smoke test | `python scripts/smoke_test.py` |
 | Benchmarks | `python -m benchmarks.benchmark --markdown` |
+| Build the artifacts | `python -m build && twine check dist/*` |
 | MNIST data | `python scripts/download_mnist.py` |
 | Notebook | `jupyter lab examples/mnist.ipynb` |
 | Full install | `pip install -r requirements-dev.txt` |

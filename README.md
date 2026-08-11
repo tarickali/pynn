@@ -26,6 +26,7 @@ tape are written up in [`docs/DESIGN.md`](docs/DESIGN.md).
 - **Initializers** — Zeros, ones, constant, random uniform/normal, Xavier (Glorot), He, and LeCun variants (uniform and normal). Fan-in and fan-out are read from the weight layout, so a `Conv2d` kernel is scaled by its receptive field rather than by its output-channel count.
 - **Utilities** — `one_hot`, shuffled batch iteration (`get_batches`), `im2col` / `col2im`, and `set_seed` for a reproducible run.
 - **Optional acceleration** — the `numba` extra compiles the convolution backward pass for a ~1.27x speedup on a CNN; results are identical with or without it.
+- **Typed** — fully annotated and checked by `mypy`, with a PEP 561 `py.typed` marker in the wheel, so a consuming project's type checker reads the annotations rather than treating the package as untyped.
 - **Verified gradients** — every differentiable operation is checked against central-difference numerical gradients, including broadcasting and non-linear graph topologies (shared inputs, residual connections, tied weights). The checker is public API: see [Verification](#verification).
 
 ---

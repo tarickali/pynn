@@ -25,6 +25,13 @@ from pynn.core import (
 )
 from pynn.optim import SGD, Adadelta, Adagrad, Adam, Optimizer, RMSprop
 
+#: The one place the version is written. `pyproject.toml` declares
+#: `dynamic = ["version"]` and reads this attribute, so a release is a single edit here
+#: and there is no second literal to disagree with it. Keep it a plain string:
+#: setuptools parses this file rather than importing it, and importing it would need
+#: numpy, which an isolated build environment does not have.
+__version__ = "0.1.0"
+
 __all__ = [
     "SGD",
     "Adadelta",
