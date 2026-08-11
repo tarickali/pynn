@@ -35,7 +35,7 @@ Three files cover the three situations anyone is actually in:
 | File | Installs | For |
 | --- | --- | --- |
 | `requirements.txt` | the library, NumPy only | running `pynn`, `python -m pynn.verify` |
-| `requirements-dev.txt` | + tests, lint, types, examples, notebook, benchmarks, release tooling | working on the repository |
+| `requirements-dev.txt` | + tests, lint, types, examples, notebook, benchmarks, hooks, release tooling | working on the repository |
 | `requirements-external.txt` | + torch, tensorflow | the `external`-marked comparison tests |
 
 Finer control lives in `pyproject.toml`, which declares the extras those files point at
@@ -49,6 +49,7 @@ pip install -e ".[notebook]"   # matplotlib, jupyterlab, ipykernel, nbclient
 pip install -e ".[benchmark]"  # torch
 pip install -e ".[numba]"      # compiles the convolution backward pass
 pip install -e ".[release]"    # build, twine — see section 11
+pip install -e ".[hooks]"      # pre-commit — see section 3
 ```
 
 **Two groups sit outside `requirements-dev.txt` on purpose:**
@@ -159,6 +160,49 @@ found in 44 source files`
 Ruff covers the **code cells of `examples/mnist.ipynb`** too — it parses `.ipynb`
 natively. `ruff format` on a notebook rewrites cell sources and leaves outputs alone.
 Mypy is scoped to `pynn/` only (`files = ["pynn"]`).
+
+`ruff` and `mypy` are pinned to exact versions in `pyproject.toml`, not floors. They are
+the only two dependencies whose *output* is the check, so a release that lands overnight
+turns a repository nobody touched red — a newer `ruff format` reformats code that is
+clean today, a newer mypy reports errors the current one does not. The cost is that
+upgrading is now a deliberate edit; run `scripts/ci_matrix.sh` before moving a pin.
+
+### Pre-commit hooks
+
+The same checks, run before the commit rather than after the push.
+
+```bash
+pip install -e ".[hooks]"
+pre-commit install          # once per clone; writes .git/hooks/pre-commit
+pre-commit run --all-files  # the whole tree, without committing
+```
+
+**Expected:** five `Passed` lines and nothing modified.
+
+```
+ruff check...............................................................Passed
+ruff format..............................................................Passed
+trim trailing whitespace.................................................Passed
+fix end of files.........................................................Passed
+mypy.....................................................................Passed
+```
+
+Three of the five hooks *fix* rather than report — `ruff format`,
+`trailing-whitespace`, and `end-of-file-fixer`. pre-commit fails any run in which a hook
+modified a file, so a rewritten file is not quietly committed: re-stage it and commit
+again.
+
+Hook revisions in `.pre-commit-config.yaml` are pinned to the same ruff and mypy the
+`dev` extra installs. Bump both in one commit or the hook and CI start disagreeing about
+what clean means.
+
+**Activate the virtualenv first.** The mypy hook is a `local` / `language: system` hook,
+so it runs the `mypy` on `PATH` rather than one pre-commit installed on its own. That is
+deliberate: mypy's findings depend on the NumPy stubs it can see, and an isolated hook
+environment has no NumPy unless a version is pinned into it — a numpy pin this project
+avoids everywhere else, precisely so the CI matrix can test several. Without the
+virtualenv the hook fails with `Executable mypy not found`, which is a loud failure
+rather than a check that quietly passes on nothing.
 
 ---
 
@@ -462,6 +506,7 @@ reliably on it, so without a fallback the dependency fails to resolve.
 | Lint | `ruff check pynn tests examples scripts benchmarks` |
 | Format | `ruff format pynn tests examples scripts benchmarks` |
 | Types | `mypy` |
+| All of the above, pre-commit | `pre-commit run --all-files` |
 | Smoke test | `python scripts/smoke_test.py` |
 | Benchmarks | `python -m benchmarks.benchmark --markdown` |
 | Build the artifacts | `python -m build && twine check dist/*` |

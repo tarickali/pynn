@@ -177,6 +177,14 @@ mypy                  # type check (files are configured in pyproject.toml)
 
 `ruff check` and `mypy` are both clean across `pynn`, `tests`, `examples`,
 `scripts`, and `benchmarks` — including the code cells of `examples/mnist.ipynb`.
+Both are pinned to exact versions, since a newer `ruff format` can reformat code that
+is clean today and turn a repository nobody touched red.
+
+The same checks run as git hooks, pinned to the same versions:
+
+```bash
+pip install -e ".[hooks]" && pre-commit install
+```
 
 ### Continuous integration
 

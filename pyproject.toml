@@ -95,9 +95,14 @@ release = [
     "build>=1.0",
     "twine>=5.0",
 ]
+# The local commit gate, `.pre-commit-config.yaml`. Separate from `dev` so that `dev`
+# stays exactly what CI installs — CI has no commits to hook.
+hooks = [
+    "pre-commit==4.6.2",
+]
 # Everything needed to run every part of the repository, on any supported Python.
 all = [
-    "pynn[dev,examples,mnist,notebook,benchmark,release]",
+    "pynn[dev,examples,mnist,notebook,benchmark,release,hooks]",
 ]
 
 [tool.setuptools.dynamic]
