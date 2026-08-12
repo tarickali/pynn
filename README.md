@@ -325,6 +325,16 @@ deliberately cell-to-cell, since that is the same computation.
 
 ---
 
+## Contributing
+
+[`CONTRIBUTING.md`](CONTRIBUTING.md) is a single walkthrough — adding a layer, end to
+end — because that is the question this codebase's structure actually answers: the
+functional op and its reverse closure, the `Module` around it, the gradcheck entry that
+puts it in the shipped sweep, and when a layer needs an invariant a gradient check
+cannot see. Released versions are recorded in [`CHANGELOG.md`](CHANGELOG.md).
+
+---
+
 ## Design
 
 [`docs/DESIGN.md`](docs/DESIGN.md) covers the parts worth explaining rather than reading:

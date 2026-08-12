@@ -1,57 +1,30 @@
 # TASKS
 
 Work that is queued but not scheduled. Nothing here is a correctness bug — the library
-is green on Python 3.10–3.14 with 767 tests, 332 verification checks, and 98% coverage.
+is green on Python 3.10–3.14 with 790 tests, 340 verification checks, and 98% coverage.
 
 Everything structural is done — the last item of that kind, differentiable indexing, is
-what unblocked the recurrent cells. Items 1-9 are independent and can be picked up in any
-order or dropped; the sequence-modelling section at the end is a dependency chain, and is
-future work rather than queued work.
-
----
-
-## Packaging and process
-
-### 1. `CONTRIBUTING.md`, `CHANGELOG.md`, and a `v0.1.0` tag
-
-The contributing guide should be a "how to add a layer" walkthrough, because that is the
-question the codebase's structure actually answers: subclass `Module`, implement
-`forward` / `build` / `hyperparameters`, add the functional op with its `reverse`, then
-add a gradcheck entry so the new op joins the sweep.
-
-### 2. Packaging polish
-
-- `py.typed` marker, so the type hints are visible to consumers.
-- `__version__` in `pynn/__init__.py` — the version currently lives only in
-  `pyproject.toml`.
-- TestPyPI. Publishing forces the packaging to stay honest.
-
-### 3. Pin the tool versions
-
-`ruff>=0.6` and `mypy>=1.11` let CI install anything newer than what is installed
-locally, and a newer `ruff format` can reformat code that is clean here.
-`scripts/ci_matrix.sh` makes it cheap to find out when that starts happening.
-
-### 4. `.pre-commit-config.yaml`
-
-ruff, ruff-format, mypy, trailing-whitespace, end-of-file-fixer.
+what unblocked the recurrent cells — and so is everything in the packaging and process
+section that used to lead this file. Items 1-5 are independent and can be picked up in
+any order or dropped; the sequence-modelling section at the end is a dependency chain,
+and is future work rather than queued work.
 
 ---
 
 ## Nice to have
 
-### 5. `Tensor.to_dot()`
+### 1. `Tensor.to_dot()`
 
 A Graphviz dump of the tape. Cheap to write, and a computation-graph figure in the
 README is the most effective way to show a reader the tape is real.
 
-### 6. Property-based tests over `unbroadcast`
+### 2. Property-based tests over `unbroadcast`
 
 Hypothesis over shapes and dtypes. That function is fiddly enough — two reduction rules
 that have to compose correctly — to deserve generated cases rather than a hand-written
 list.
 
-### 7. More layers, losses, and optimizers
+### 3. More layers, losses, and optimizers
 
 Each is small and independent; this is the pile to draw from when time is short.
 
@@ -64,7 +37,7 @@ Each is small and independent; this is the pile to draw from when time is short.
 | Layers | `ConvTranspose2d` (enables an autoencoder example), `Unflatten` as the inverse of `Flatten`, `Identity` as a layer |
 | Metrics | a `pynn.metrics` module: accuracy, precision / recall / F1, confusion matrix, MSE / MAE / R² |
 
-### 8. Further acceleration, in measured order
+### 4. Further acceleration, in measured order
 
 `col2im` is compiled and the CNN profile is now flat. These are the remaining
 candidates, each timed rather than guessed at. Every one of them costs a *second*
@@ -111,7 +84,7 @@ memory movement with no arithmetic, where NumPy's copy is already a tuned memcpy
 is no interpreter overhead to remove. Better addressed by avoiding the transpose than by
 compiling the copy.
 
-### 9. A second example domain
+### 5. A second example domain
 
 A char-level RNN on a small text file, or an MLP autoencoder on MNIST with a
 reconstruction grid. Shows the library generalizes past classification. Everything the
@@ -132,7 +105,7 @@ and gradients flow through a full scaled-dot-product attention built from them. 
 mask is `masked_fill(scores, future, -1e9)` ahead of the softmax, and the filled
 positions come back with exactly zero gradient.
 
-### 10. Fused recurrent layers
+### 6. Fused recurrent layers
 
 `RNNCell`, `LSTMCell`, and a `GRUCell` are the primitives; these are the layers that own
 the loop, so a caller who does not need a custom one does not have to write it.
@@ -175,7 +148,7 @@ the loop, so a caller who does not need a custom one does not have to write it.
   `RNNCell` / `LSTMCell` cases, plus one bidirectional case. An invariant asserting that
   a bidirectional layer's two directions see the sequence in opposite orders.
 
-### 11. Attention
+### 7. Attention
 
 - **`scaled_dot_product_attention(q, k, v, mask=None)`** in `pynn/functional/`:
   `softmax(q @ k.T / sqrt(d)) @ v`. Verified expressible today; the work is the API, the
@@ -191,7 +164,7 @@ the loop, so a caller who does not need a custom one does not have to write it.
   all three of Q, K, and V — self-attention is the case where one input has three
   consumers, which is exactly the shape a reverse pass that overwrites gets wrong.
 
-### 12. Transformer
+### 8. Transformer
 
 - **`TransformerEncoderLayer`**: multi-head self-attention, residual, `LayerNorm`,
   position-wise feed-forward (two `Linear` layers with `GELU` between them), residual,
@@ -216,7 +189,7 @@ because "the autodiff engine is general enough that a transformer is a compositi
 what is already in it, not a rewrite" is a claim worth being able to demonstrate rather
 than assert.
 
-If only part of it is ever built, **item 11 is the one to build**: attention is the
+If only part of it is ever built, **item 7 is the one to build**: attention is the
 single most-asked-about architecture, and it is roughly a hundred lines on top of what
 is already here.
 
@@ -239,3 +212,12 @@ Recorded so this file does not re-propose them. Details in `PROJECT_REVIEW.md` P
 - im2col `conv2d`, and the JIT-compiled `col2im` scatter behind the `numba` extra
 - CI across Python 3.10–3.14, coverage floor, `scripts/ci_matrix.sh`
 - `docs/DESIGN.md`, benchmarks, the executed MNIST notebook
+- `CONTRIBUTING.md` (the how-to-add-a-layer walkthrough), `CHANGELOG.md`, and the
+  annotated `v0.1.0` tag — created locally, not pushed
+- `py.typed` shipped as package data, and `pynn.__version__` as the single source of the
+  version that `pyproject.toml` reads back, guarded by `tests/test_packaging.py`
+- A `release` extra plus the build and `twine check` steps, documented in `USAGE.md`
+  §11. **Nothing has been uploaded to TestPyPI** — that call is deliberately the
+  maintainer's
+- ruff and mypy pinned exactly, and `.pre-commit-config.yaml` pinned to the same two
+  versions

@@ -1,10 +1,10 @@
 # Agent prompts
 
-Four independent work packages covering items 1-9 of [`TASKS.md`](../TASKS.md). Each is
+Independent work packages covering items 1-5 of [`TASKS.md`](../TASKS.md). Each is
 self-contained and touches a mostly disjoint set of files, so they can run in any order —
 or in parallel, if each agent works on its own branch and rebases before merging.
 
-Items 10-12, the sequence-modelling chain, are deliberately not covered here: they are a
+Items 6-8, the sequence-modelling chain, are deliberately not covered here: they are a
 dependency chain rather than independent packages, and they are future work rather than
 queued work. They would want their own prompts, written when they are actually scheduled.
 
@@ -12,10 +12,16 @@ Copy one prompt verbatim into a fresh agent session.
 
 | Prompt | TASKS.md items | Rough size |
 | --- | --- | --- |
-| A — Packaging and process | 1, 2, 3, 4 | small, mostly config |
-| B — Testing, layers, performance | 6, 7, 8 | large |
-| C — A second example domain | 9 | medium, one notebook |
-| D — Graph visualizer | 5 | small |
+| ~~A — Packaging and process~~ | — | **done** |
+| B — Testing, layers, performance | 2, 3, 4 | large |
+| C — A second example domain | 5 | medium, one notebook |
+| D — Graph visualizer | 1 | small |
+
+Prompt A is finished and its section removed: it produced `CONTRIBUTING.md`,
+`CHANGELOG.md`, the annotated `v0.1.0` tag, `pynn/py.typed`, `pynn.__version__`, the
+exact ruff and mypy pins, and `.pre-commit-config.yaml`. The remaining letters are left
+as they were rather than shifted up, so a prompt already in flight still means what it
+said.
 
 ---
 
@@ -32,10 +38,12 @@ Every prompt below already includes this. It is repeated here so it can be edite
 > `PROJECT_REVIEW.md` is a historical record of two review passes — read it for context,
 > but `TASKS.md` is the live queue.
 >
-> **State of the repo.** Green on Python 3.10–3.14: 767 tests, 332 checks from
-> `python -m pynn.verify` (201 of them numerical gradient checks), 98.3% line coverage
+> **State of the repo.** Green on Python 3.10–3.14: 790 tests, 340 checks from
+> `python -m pynn.verify` (209 of them numerical gradient checks), 98.3% line coverage
 > with a 95% floor enforced in CI. `ruff` and `mypy` are clean across `pynn tests
 > examples scripts benchmarks`, including the code cells of `examples/mnist.ipynb`.
+> `pre-commit run --all-files` is clean too, and `ruff` and `mypy` are pinned exactly —
+> if you bump one, bump `.pre-commit-config.yaml` in the same commit.
 >
 > **Environment.** Use `.venv/bin/python` (Python 3.14) — a bare `pytest` on `PATH`
 > resolves to a Homebrew install without `pytest-cov`. `pynn` is installed editable.
@@ -72,86 +80,27 @@ Every prompt below already includes this. It is repeated here so it can be edite
 >   trailer. One concern per commit. Only commit when green. **Do not push.**
 > - After committing, run `.venv/bin/python scripts/generate_read_files.py` and commit
 >   the refreshed `READ_FILES.md` on its own.
-> - Update `TASKS.md` to mark what you finished, and `README.md` / `USAGE.md` /
->   `docs/DESIGN.md` if you changed anything they claim.
+> - Update `TASKS.md` to mark what you finished, add a `## [Unreleased]` entry to
+>   `CHANGELOG.md`, and update `README.md` / `USAGE.md` / `docs/DESIGN.md` if you
+>   changed anything they claim. `CONTRIBUTING.md` §7 lists what to check.
 >
 > Report back with: what shipped, commit SHAs, the test/verify/coverage numbers, and
 > anything you deliberately left out and why.
 
 ---
 
-## Prompt A — Packaging and process
-
-**TASKS.md items 1, 2, 3, 4.** Small and mostly configuration, but it is what makes the
-project look finished to someone landing on the repo.
-
-```text
-[paste the shared preamble here]
-
-Your job is TASKS.md items 1, 2, 3, and 4 — packaging and process. Read those entries
-first; the detail below is what matters beyond them.
-
-1. CONTRIBUTING.md, CHANGELOG.md, and a v0.1.0 tag.
-   The contributing guide should be a "how to add a layer" walkthrough, because that is
-   the question this codebase's structure actually answers. Walk through a real example
-   end to end: subclass Module, implement forward / build / hyperparameters, write the
-   functional op with its reverse closure, add a gradcheck entry so the op joins the
-   sweep, add an invariant if the layer has behaviour a gradient check cannot see (a
-   train/eval difference, a buffer). Point at pynn/nn/modules.py::Dropout as the smallest
-   complete example and pynn/functional/modules.py::layer_norm as one with a hand-written
-   fused reverse. Explain *why* the gradcheck entry is required, not just that it is.
-
-   CHANGELOG.md should follow Keep a Changelog. There is no released history, so v0.1.0
-   is one entry describing the library as it stands. Do not invent dates for past work —
-   use the git history if you want them (`git log --date=short`).
-
-   Create the tag as an annotated tag locally. Do not push it.
-
-2. Packaging polish.
-   - `pynn/py.typed` plus the setuptools package-data wiring, so the type hints are
-     visible to consumers. Verify it actually ships: build a wheel and confirm the marker
-     is inside it.
-   - `__version__` in `pynn/__init__.py`. The version currently lives only in
-     pyproject.toml, and two sources of truth will drift — read it from installed
-     metadata via importlib.metadata with a fallback, or make pyproject read it from the
-     package. Pick one, and say in a comment why.
-   - Add a test asserting the two agree, so the drift is caught rather than discovered.
-   - TestPyPI: prepare everything needed (build, twine check) and document the upload
-     command in USAGE.md, but DO NOT upload. Publishing is the user's call.
-
-3. Pin the tool versions.
-   `ruff>=0.6` and `mypy>=1.11` let CI install anything newer than what is installed
-   locally, and a newer `ruff format` can reformat code that is clean here. Pin them to
-   the versions currently installed in .venv (check with `.venv/bin/python -m pip list`).
-   Explain the trade-off in a comment: pinning trades "silent CI breakage on an upgrade"
-   for "you have to bump it deliberately". Do not pin numpy — it is a runtime dependency
-   and the matrix deliberately tests several versions.
-
-4. .pre-commit-config.yaml with ruff, ruff-format, mypy, trailing-whitespace, and
-   end-of-file-fixer. Pin the hook revisions to match item 3. Verify it runs clean on the
-   current tree (`pre-commit run --all-files`) and document it in USAGE.md. If any hook
-   would reformat committed files, fix the files rather than loosening the hook.
-
-Constraints:
-- Do not change library behaviour. This package is configuration, docs, and metadata.
-- If pre-commit or the packaging changes force a code change, that is a signal — flag it
-  rather than quietly reformatting half the repo.
-```
-
----
-
 ## Prompt B — Testing, layers, and performance
 
-**TASKS.md items 6, 7, 8.** The largest package. Item 8 is measurement-driven and has
+**TASKS.md items 2, 3, 4.** The largest package. Item 4 is measurement-driven and has
 numbers already recorded in `TASKS.md` — respect them.
 
 ```text
 [paste the shared preamble here]
 
-Your job is TASKS.md items 6, 7, and 8. Read those entries first — item 8 in particular
+Your job is TASKS.md items 2, 3, and 4. Read those entries first — item 4 in particular
 already contains measurements you should not re-derive from scratch, only extend.
 
-6. Property-based tests over unbroadcast.
+2. Property-based tests over unbroadcast.
    Add Hypothesis to the dev extra and write property tests for
    pynn/core/utils.py::unbroadcast and matrix_multiply_gradients. These are the two
    fiddliest functions in the library — unbroadcast composes two different reduction
@@ -167,8 +116,8 @@ already contains measurements you should not re-derive from scratch, only extend
    Generate shapes with Hypothesis strategies rather than hand-listing them. Keep the
    example budget modest so the suite stays under ~10s.
 
-7. More layers, losses, and optimizers.
-   Pick from the table in TASKS.md item 7. Do NOT do all of it — choose what is coherent
+3. More layers, losses, and optimizers.
+   Pick from the table in TASKS.md item 3. Do NOT do all of it — choose what is coherent
    and finish it properly rather than half-landing six things. Suggested slice, in order
    of value:
      - Unflatten / Reshape as the inverse of Flatten, and Identity as a layer. Small, and
@@ -180,8 +129,8 @@ already contains measurements you should not re-derive from scratch, only extend
    needs a closed-form reference transcription in tests/optim/optimizers_test.py — "the
    loss went down" does not distinguish a correct update rule from a nearly-correct one.
 
-8. Further acceleration — measurement first, and the first win needs no dependency.
-   TASKS.md item 8 records that SGD.update is 32% of an MLP training step, almost all of
+4. Further acceleration — measurement first, and the first win needs no dependency.
+   TASKS.md item 4 records that SGD.update is 32% of an MLP training step, almost all of
    it allocation: every line builds a fresh full-size array. An in-place NumPy rewrite
    measured 1.8-2.5x with no dependency and no second implementation; a fused numba
    kernel measured 4.6-7.2x but costs a dual implementation per optimizer, five of them
@@ -203,7 +152,7 @@ already contains measurements you should not re-derive from scratch, only extend
    Update the benchmark table in README.md if the numbers move.
 
 Constraints:
-- Item 8 must not change any optimizer's arithmetic. If a reference test needs updating,
+- Item 4 must not change any optimizer's arithmetic. If a reference test needs updating,
   you have changed behaviour — stop and flag it.
 - Do not add a dependency without a measurement justifying it.
 ```
@@ -212,13 +161,13 @@ Constraints:
 
 ## Prompt C — A second example domain
 
-**TASKS.md item 9.** One notebook, but it is the most visible artifact in the repo after
+**TASKS.md item 5.** One notebook, but it is the most visible artifact in the repo after
 the README.
 
 ```text
 [paste the shared preamble here]
 
-Your job is TASKS.md item 9: a second example domain, showing the library generalizes
+Your job is TASKS.md item 5: a second example domain, showing the library generalizes
 past image classification.
 
 Build examples/char_rnn.ipynb — a character-level language model on a small public-domain
@@ -268,13 +217,13 @@ Constraints:
 
 ## Prompt D — Graph visualizer
 
-**TASKS.md item 5.** Small and self-contained, and it produces the single most useful
+**TASKS.md item 1.** Small and self-contained, and it produces the single most useful
 figure the README is missing.
 
 ```text
 [paste the shared preamble here]
 
-Your job is TASKS.md item 5: a computation-graph visualizer.
+Your job is TASKS.md item 1: a computation-graph visualizer.
 
 Add Tensor.to_dot() (or a pynn.viz module — your call, argue for it) that walks the tape
 from a Tensor and emits Graphviz DOT. The tape already carries what you need: every
@@ -314,15 +263,15 @@ Constraints:
 
 ## Running these in parallel
 
-The four packages touch mostly disjoint files, but three overlaps are worth knowing:
+The three packages touch mostly disjoint files, but three overlaps are worth knowing:
 
-- **A, B, C, and D all touch `README.md`, `USAGE.md`, and `TASKS.md`.** Expect conflicts
+- **B, C, and D all touch `README.md`, `USAGE.md`, and `TASKS.md`.** Expect conflicts
   there; they are prose, so they resolve by hand easily.
 - **B and D both add tests**, but in different files.
-- **B's item 8 touches every optimizer**; nothing else does.
+- **B's item 4 touches every optimizer**; nothing else does.
 - `READ_FILES.md` is generated, so never merge it — regenerate after merging with
   `.venv/bin/python scripts/generate_read_files.py`.
 
-Suggested order if running sequentially: **A** (cheap, makes the repo look finished),
-then **D** (produces the README figure), then **C** (the big visible artifact), then **B**
-(the largest, and the one most likely to want its own review).
+Suggested order if running sequentially: **D** (produces the README figure), then **C**
+(the big visible artifact), then **B** (the largest, and the one most likely to want its
+own review).
