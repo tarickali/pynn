@@ -155,7 +155,7 @@ ruff format --check pynn tests examples scripts benchmarks # check only, no writ
 mypy                                                       # files configured in pyproject
 ```
 
-**Expected:** `All checks passed!` · `90 files already formatted` · `Success: no issues
+**Expected:** `All checks passed!` · `91 files already formatted` · `Success: no issues
 found in 51 source files`
 
 Ruff covers the **code cells of `examples/mnist.ipynb`** too — it parses `.ipynb`
@@ -230,6 +230,21 @@ python scripts/download_mnist.py        # writes examples/data/mnist/train.csv (
 `examples/mnist.py` falls back to synthetic data when the file is absent;
 `examples/mnist.ipynb` raises with instructions instead, because a notebook of synthetic
 results would be misleading.
+
+### The tape figure
+
+`docs/tape.svg`, the computation graph the README opens with, is generated rather than
+drawn:
+
+```bash
+python scripts/generate_tape_figure.py   # writes docs/tape.dot and docs/tape.svg
+```
+
+**Expected:** `wrote docs/tape.dot — 15 nodes`, then `wrote docs/tape.svg`.
+
+Only the SVG step needs Graphviz on `PATH` (`brew install graphviz`, `apt install
+graphviz`). Without it the DOT is still written, the script says so, and it exits 1 —
+`pynn.viz` emits text and never shells out, so the library itself needs nothing.
 
 ---
 
@@ -516,3 +531,4 @@ reliably on it, so without a fallback the dependency fails to resolve.
 | Full install | `pip install -r requirements-dev.txt` |
 | CI on every Python | `scripts/ci_matrix.sh` |
 | Refresh READ_FILES.md | `python scripts/generate_read_files.py` |
+| Refresh the tape figure | `python scripts/generate_tape_figure.py` |

@@ -20,6 +20,10 @@ While the major version is 0, the public API may change between minor versions.
   keeps is the part nearest the loss. Emitting text is the whole of it: nothing shells
   out to Graphviz or imports the `graphviz` package, and rendering stays the caller's.
   `Tensor.to_dot()` is a facade over it.
+- **A tape figure**, `docs/tape.svg`, at the top of the README and in `docs/DESIGN.md`
+  §2 — the fifteen nodes a two-layer MLP and a squared-error loss actually leave behind.
+  `python scripts/generate_tape_figure.py` regenerates it; only that script needs
+  Graphviz, and it writes the DOT either way.
 
 ## [0.1.0] - 2026-08-12
 

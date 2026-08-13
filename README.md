@@ -11,6 +11,13 @@ Every differentiable operation is checked against central-difference numerical g
 — 209 checks, including branching graph topologies — and the design decisions behind the
 tape are written up in [`docs/DESIGN.md`](docs/DESIGN.md).
 
+![The computation graph of a two-layer MLP and a squared-error loss](docs/tape.svg)
+
+*The tape a forward pass leaves behind, drawn by the library itself: every `Tensor` in a
+two-layer MLP and its loss, and every edge `backward` walks. Rounded nodes were computed,
+square ones are leaves — grey for the input batch and the targets, amber for parameters,
+named from the model. One call: `loss.to_dot(model)`.*
+
 ---
 
 ## Features

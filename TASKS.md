@@ -1,11 +1,11 @@
 # TASKS
 
 Work that is queued but not scheduled. Nothing here is a correctness bug — the library
-is green on Python 3.10–3.14 with 790 tests, 340 verification checks, and 98% coverage.
+is green on Python 3.10–3.14 with 807 tests, 341 verification checks, and 98% coverage.
 
 Everything structural is done — the last item of that kind, differentiable indexing, is
 what unblocked the recurrent cells — and so is everything in the packaging and process
-section that used to lead this file. Items 1-5 are independent and can be picked up in
+section that used to lead this file. Items 1-4 are independent and can be picked up in
 any order or dropped; the sequence-modelling section at the end is a dependency chain,
 and is future work rather than queued work.
 
@@ -13,18 +13,13 @@ and is future work rather than queued work.
 
 ## Nice to have
 
-### 1. `Tensor.to_dot()`
-
-A Graphviz dump of the tape. Cheap to write, and a computation-graph figure in the
-README is the most effective way to show a reader the tape is real.
-
-### 2. Property-based tests over `unbroadcast`
+### 1. Property-based tests over `unbroadcast`
 
 Hypothesis over shapes and dtypes. That function is fiddly enough — two reduction rules
 that have to compose correctly — to deserve generated cases rather than a hand-written
 list.
 
-### 3. More layers, losses, and optimizers
+### 2. More layers, losses, and optimizers
 
 Each is small and independent; this is the pile to draw from when time is short.
 
@@ -37,7 +32,7 @@ Each is small and independent; this is the pile to draw from when time is short.
 | Layers | `ConvTranspose2d` (enables an autoencoder example), `Unflatten` as the inverse of `Flatten`, `Identity` as a layer |
 | Metrics | a `pynn.metrics` module: accuracy, precision / recall / F1, confusion matrix, MSE / MAE / R² |
 
-### 4. Further acceleration, in measured order
+### 3. Further acceleration, in measured order
 
 `col2im` is compiled and the CNN profile is now flat. These are the remaining
 candidates, each timed rather than guessed at. Every one of them costs a *second*
@@ -84,7 +79,7 @@ memory movement with no arithmetic, where NumPy's copy is already a tuned memcpy
 is no interpreter overhead to remove. Better addressed by avoiding the transpose than by
 compiling the copy.
 
-### 5. A second example domain
+### 4. A second example domain
 
 A char-level RNN on a small text file, or an MLP autoencoder on MNIST with a
 reconstruction grid. Shows the library generalizes past classification. Everything the
@@ -105,7 +100,7 @@ and gradients flow through a full scaled-dot-product attention built from them. 
 mask is `masked_fill(scores, future, -1e9)` ahead of the softmax, and the filled
 positions come back with exactly zero gradient.
 
-### 6. Fused recurrent layers
+### 5. Fused recurrent layers
 
 `RNNCell`, `LSTMCell`, and a `GRUCell` are the primitives; these are the layers that own
 the loop, so a caller who does not need a custom one does not have to write it.
@@ -148,7 +143,7 @@ the loop, so a caller who does not need a custom one does not have to write it.
   `RNNCell` / `LSTMCell` cases, plus one bidirectional case. An invariant asserting that
   a bidirectional layer's two directions see the sequence in opposite orders.
 
-### 7. Attention
+### 6. Attention
 
 - **`scaled_dot_product_attention(q, k, v, mask=None)`** in `pynn/functional/`:
   `softmax(q @ k.T / sqrt(d)) @ v`. Verified expressible today; the work is the API, the
@@ -164,7 +159,7 @@ the loop, so a caller who does not need a custom one does not have to write it.
   all three of Q, K, and V — self-attention is the case where one input has three
   consumers, which is exactly the shape a reverse pass that overwrites gets wrong.
 
-### 8. Transformer
+### 7. Transformer
 
 - **`TransformerEncoderLayer`**: multi-head self-attention, residual, `LayerNorm`,
   position-wise feed-forward (two `Linear` layers with `GELU` between them), residual,
@@ -177,7 +172,7 @@ the loop, so a caller who does not need a custom one does not have to write it.
 - **`TransformerDecoderLayer` / `TransformerDecoder`** with causal masking and
   cross-attention, if a generative example is wanted.
 - **An example** is what makes this worth having: a small character-level or
-  toy-translation transformer, in the shape of `examples/mnist.ipynb`. Item 9's char-RNN
+  toy-translation transformer, in the shape of `examples/mnist.ipynb`. Item 4's char-RNN
   notebook would make a natural companion — the same task, two architectures, honestly
   compared.
 
@@ -189,7 +184,7 @@ because "the autodiff engine is general enough that a transformer is a compositi
 what is already in it, not a rewrite" is a claim worth being able to demonstrate rather
 than assert.
 
-If only part of it is ever built, **item 7 is the one to build**: attention is the
+If only part of it is ever built, **item 6 is the one to build**: attention is the
 single most-asked-about architecture, and it is roughly a hundred lines on top of what
 is already here.
 
@@ -221,3 +216,5 @@ Recorded so this file does not re-propose them. Details in `PROJECT_REVIEW.md` P
   maintainer's
 - ruff and mypy pinned exactly, and `.pre-commit-config.yaml` pinned to the same two
   versions
+- A Graphviz dump of the tape: `pynn.viz.to_dot`, with `Tensor.to_dot` as a facade, and
+  the figure it generates at the top of the README

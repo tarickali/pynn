@@ -64,6 +64,26 @@ What it costs: no operator metadata to introspect, no way to serialize a graph, 
 Python closure object allocated per operation. For a library whose point is to be
 readable, that is the right side of the trade.
 
+### What the tape looks like
+
+Because the graph is a byproduct of the forward pass rather than something declared
+ahead of it, it can be read back off the tensors themselves. That is all `pynn/viz.py`
+does: walk `children` from an output, label each node with its `forward` string and its
+shape, emit Graphviz DOT.
+
+![The computation graph of a two-layer MLP and a squared-error loss](tape.svg)
+
+Fifteen nodes — `Sequential([Linear(3, 4, activation="relu"), Linear(4, 1)])` on a batch
+of two, and a squared-error loss. Every one of them is a `Tensor`: the parameters, the
+input batch, the targets, and every intermediate. There is no operator object standing
+beside them, which is what "closures, not an operator registry" amounts to in practice —
+the nodes are the values, and the operation survives only as a name and a closure.
+
+The `identity` node is the second layer's default activation. It is there because it
+really ran, which is the define-by-run bargain in one node: the graph records what
+happened rather than what was declared, so a no-op costs a node and a data-dependent
+branch costs nothing.
+
 ### `grad +=`, never `grad =`
 
 The single most important line in the file above is `x.grad += ...`.

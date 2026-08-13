@@ -1,10 +1,10 @@
 # Agent prompts
 
-Independent work packages covering items 1-5 of [`TASKS.md`](../TASKS.md). Each is
+Independent work packages covering items 1-4 of [`TASKS.md`](../TASKS.md). Each is
 self-contained and touches a mostly disjoint set of files, so they can run in any order —
 or in parallel, if each agent works on its own branch and rebases before merging.
 
-Items 6-8, the sequence-modelling chain, are deliberately not covered here: they are a
+Items 5-7, the sequence-modelling chain, are deliberately not covered here: they are a
 dependency chain rather than independent packages, and they are future work rather than
 queued work. They would want their own prompts, written when they are actually scheduled.
 
@@ -13,15 +13,16 @@ Copy one prompt verbatim into a fresh agent session.
 | Prompt | TASKS.md items | Rough size |
 | --- | --- | --- |
 | ~~A — Packaging and process~~ | — | **done** |
-| B — Testing, layers, performance | 2, 3, 4 | large |
-| C — A second example domain | 5 | medium, one notebook |
-| D — Graph visualizer | 1 | small |
+| B — Testing, layers, performance | 1, 2, 3 | large |
+| C — A second example domain | 4 | medium, one notebook |
+| ~~D — Graph visualizer~~ | — | **done** |
 
-Prompt A is finished and its section removed: it produced `CONTRIBUTING.md`,
+Prompts A and D are finished and their sections removed. A produced `CONTRIBUTING.md`,
 `CHANGELOG.md`, the annotated `v0.1.0` tag, `pynn/py.typed`, `pynn.__version__`, the
-exact ruff and mypy pins, and `.pre-commit-config.yaml`. The remaining letters are left
-as they were rather than shifted up, so a prompt already in flight still means what it
-said.
+exact ruff and mypy pins, and `.pre-commit-config.yaml`; D produced `pynn/viz.py`,
+`Tensor.to_dot`, and the tape figure the README now opens with. The remaining letters are
+left as they were rather than shifted up, so a prompt already in flight still means what
+it said.
 
 ---
 
@@ -38,8 +39,8 @@ Every prompt below already includes this. It is repeated here so it can be edite
 > `PROJECT_REVIEW.md` is a historical record of two review passes — read it for context,
 > but `TASKS.md` is the live queue.
 >
-> **State of the repo.** Green on Python 3.10–3.14: 790 tests, 340 checks from
-> `python -m pynn.verify` (209 of them numerical gradient checks), 98.3% line coverage
+> **State of the repo.** Green on Python 3.10–3.14: 807 tests, 341 checks from
+> `python -m pynn.verify` (209 of them numerical gradient checks), 98.4% line coverage
 > with a 95% floor enforced in CI. `ruff` and `mypy` are clean across `pynn tests
 > examples scripts benchmarks`, including the code cells of `examples/mnist.ipynb`.
 > `pre-commit run --all-files` is clean too, and `ruff` and `mypy` are pinned exactly —
@@ -91,16 +92,16 @@ Every prompt below already includes this. It is repeated here so it can be edite
 
 ## Prompt B — Testing, layers, and performance
 
-**TASKS.md items 2, 3, 4.** The largest package. Item 4 is measurement-driven and has
+**TASKS.md items 1, 2, 3.** The largest package. Item 3 is measurement-driven and has
 numbers already recorded in `TASKS.md` — respect them.
 
 ```text
 [paste the shared preamble here]
 
-Your job is TASKS.md items 2, 3, and 4. Read those entries first — item 4 in particular
+Your job is TASKS.md items 1, 2, and 3. Read those entries first — item 3 in particular
 already contains measurements you should not re-derive from scratch, only extend.
 
-2. Property-based tests over unbroadcast.
+1. Property-based tests over unbroadcast.
    Add Hypothesis to the dev extra and write property tests for
    pynn/core/utils.py::unbroadcast and matrix_multiply_gradients. These are the two
    fiddliest functions in the library — unbroadcast composes two different reduction
@@ -116,8 +117,8 @@ already contains measurements you should not re-derive from scratch, only extend
    Generate shapes with Hypothesis strategies rather than hand-listing them. Keep the
    example budget modest so the suite stays under ~10s.
 
-3. More layers, losses, and optimizers.
-   Pick from the table in TASKS.md item 3. Do NOT do all of it — choose what is coherent
+2. More layers, losses, and optimizers.
+   Pick from the table in TASKS.md item 2. Do NOT do all of it — choose what is coherent
    and finish it properly rather than half-landing six things. Suggested slice, in order
    of value:
      - Unflatten / Reshape as the inverse of Flatten, and Identity as a layer. Small, and
@@ -129,8 +130,8 @@ already contains measurements you should not re-derive from scratch, only extend
    needs a closed-form reference transcription in tests/optim/optimizers_test.py — "the
    loss went down" does not distinguish a correct update rule from a nearly-correct one.
 
-4. Further acceleration — measurement first, and the first win needs no dependency.
-   TASKS.md item 4 records that SGD.update is 32% of an MLP training step, almost all of
+3. Further acceleration — measurement first, and the first win needs no dependency.
+   TASKS.md item 3 records that SGD.update is 32% of an MLP training step, almost all of
    it allocation: every line builds a fresh full-size array. An in-place NumPy rewrite
    measured 1.8-2.5x with no dependency and no second implementation; a fused numba
    kernel measured 4.6-7.2x but costs a dual implementation per optimizer, five of them
@@ -152,7 +153,7 @@ already contains measurements you should not re-derive from scratch, only extend
    Update the benchmark table in README.md if the numbers move.
 
 Constraints:
-- Item 4 must not change any optimizer's arithmetic. If a reference test needs updating,
+- Item 3 must not change any optimizer's arithmetic. If a reference test needs updating,
   you have changed behaviour — stop and flag it.
 - Do not add a dependency without a measurement justifying it.
 ```
@@ -161,13 +162,13 @@ Constraints:
 
 ## Prompt C — A second example domain
 
-**TASKS.md item 5.** One notebook, but it is the most visible artifact in the repo after
+**TASKS.md item 4.** One notebook, but it is the most visible artifact in the repo after
 the README.
 
 ```text
 [paste the shared preamble here]
 
-Your job is TASKS.md item 5: a second example domain, showing the library generalizes
+Your job is TASKS.md item 4: a second example domain, showing the library generalizes
 past image classification.
 
 Build examples/char_rnn.ipynb — a character-level language model on a small public-domain
@@ -215,63 +216,16 @@ Constraints:
 
 ---
 
-## Prompt D — Graph visualizer
-
-**TASKS.md item 1.** Small and self-contained, and it produces the single most useful
-figure the README is missing.
-
-```text
-[paste the shared preamble here]
-
-Your job is TASKS.md item 1: a computation-graph visualizer.
-
-Add Tensor.to_dot() (or a pynn.viz module — your call, argue for it) that walks the tape
-from a Tensor and emits Graphviz DOT. The tape already carries what you need: every
-Tensor has `children` and a `forward` string naming the operation that produced it.
-
-Requirements:
-- Pure Python, no new runtime dependency. Emit DOT text; do not shell out to Graphviz or
-  require the graphviz package to *produce* the output. Rendering it is the caller's
-  problem, and the docstring should show both `dot -Tpng` and the IPython display route.
-- Label each node with its operation and shape. Leaves — tensors with no children — should
-  be visually distinct from computed nodes, and parameters distinct again if you can
-  detect them (`trainable` is a reasonable proxy; say so in a comment if you use it).
-- Handle the shapes that make this non-trivial: a tensor consumed twice must appear once
-  with two edges, not twice. Use id() for node identity, matching how backward's visited
-  set works.
-- A `max_nodes` cap with a clear truncation marker. An unrolled 300-step LSTM is tens of
-  thousands of nodes and would produce an unusable file; the docstring should say so.
-- Tests: node and edge counts for a known small graph, the diamond case (a tensor used
-  twice appears once), a graph built under no_grad (which has no children, so the output
-  is a single node), and the truncation path.
-
-Then use it: generate a figure for a small MLP forward+loss, commit it as an SVG or PNG
-under docs/, and put it in README.md near the top. docs/DESIGN.md §2 describes the tape
-as "closures, not an operator registry" — a picture of an actual tape is the single most
-effective way to show a reader that is real, and the README currently has no figure at
-all.
-
-Keep the committed image small (a 2-layer MLP on a batch of 2 is enough — a dozen nodes,
-not a hundred).
-
-Constraints:
-- Do not add graphviz, pydot, or networkx as a dependency. Emitting text is the whole job.
-- Do not change Tensor's existing behaviour. This is read-only over the tape.
-```
-
----
-
 ## Running these in parallel
 
-The three packages touch mostly disjoint files, but three overlaps are worth knowing:
+The two remaining packages touch mostly disjoint files, but two overlaps are worth
+knowing:
 
-- **B, C, and D all touch `README.md`, `USAGE.md`, and `TASKS.md`.** Expect conflicts
-  there; they are prose, so they resolve by hand easily.
-- **B and D both add tests**, but in different files.
-- **B's item 4 touches every optimizer**; nothing else does.
+- **B and C both touch `README.md`, `USAGE.md`, and `TASKS.md`.** Expect conflicts there;
+  they are prose, so they resolve by hand easily.
+- **B's item 3 touches every optimizer**; nothing else does.
 - `READ_FILES.md` is generated, so never merge it — regenerate after merging with
   `.venv/bin/python scripts/generate_read_files.py`.
 
-Suggested order if running sequentially: **D** (produces the README figure), then **C**
-(the big visible artifact), then **B** (the largest, and the one most likely to want its
-own review).
+Suggested order if running sequentially: **C** (the big visible artifact), then **B**
+(the largest, and the one most likely to want its own review).
