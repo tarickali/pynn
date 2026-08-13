@@ -615,9 +615,6 @@ scaled dot-product attention, would both build cleanly on what is now here.
 gap to PyTorch lives, and they are also where the code would stop being readable, which
 is the point of the project.
 
-**A graph visualizer.** `Tensor.to_dot()` would be cheap and would make the tape
-inspectable. Not written yet.
-
 **Operator fusion beyond `col2im`.** The JIT covers the one Python loop that was
 worth compiling (§15). Everything else is already a single NumPy call, and fusing
 *across* calls would mean an expression compiler, which is where the code would stop

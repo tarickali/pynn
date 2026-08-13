@@ -282,6 +282,21 @@ def check_autodiff() -> CheckReport:
         f"data {single.dtype}, output {output.dtype}, grad {single.grad.dtype}",
     )
 
+    # A picture of the tape is only evidence of anything if it is a picture of the
+    # graph backward walks. Two independent traversals — the breadth-first walk in
+    # pynn/viz.py and the topological sort here — have to reach the same tensors, and
+    # the shape that separates them is a tensor with two consumers, which a walk with
+    # no visited set draws twice.
+    shared = Tensor(np.ones((2, 2)))
+    residual = pmath.sum(F.relu(shared) + shared)
+    drawn = residual.to_dot().count("[label=")
+    walked = len(residual._topological_order())
+    report.add(
+        "to_dot draws exactly the tensors backward walks",
+        drawn == walked,
+        f"{drawn} drawn, {walked} on the tape",
+    )
+
     return report
 
 

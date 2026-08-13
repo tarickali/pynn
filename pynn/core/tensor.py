@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Callable
-from typing import Any, cast
+from collections.abc import Callable, Mapping
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 
@@ -23,6 +23,11 @@ from pynn.core.primitives import (
 )
 from pynn.core.types import Array, ArrayLike, DataType, Number, Shape
 from pynn.core.utils import matrix_multiply_gradients, unbroadcast
+
+if TYPE_CHECKING:
+    # Only for the annotation on `to_dot`. Importing it at runtime would be a cycle:
+    # `pynn.core.module` imports this file.
+    from pynn.core.module import Module
 
 __all__ = ["Tensor"]
 
@@ -223,6 +228,45 @@ class Tensor:
                 order.append(tensor)
 
         return order
+
+    def to_dot(
+        self,
+        parameters: Module | Mapping[str, Tensor] | None = None,
+        max_nodes: int | None = None,
+    ) -> str:
+        """Graphviz DOT for the tape behind this Tensor.
+
+        A facade over `pynn.viz.to_dot`, which is where the emitter lives and where
+        the output is described: drawing the tape is a reader of it rather than part
+        of what a Tensor is. Read-only — nothing here touches the graph.
+
+        Parameters
+        ----------
+        parameters : Module | Mapping[str, Tensor] | None
+            Model whose parameters should be labelled by name and drawn distinctly.
+        max_nodes : int | None
+            Most nodes to draw, past which the graph is cut short and a marker says
+            how much is missing. `None` takes `pynn.viz.DEFAULT_MAX_NODES`.
+
+        Returns
+        -------
+        str
+            DOT source, to render with `dot -Tsvg` or `graphviz.Source`.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> import pynn.core.math as pmath
+        >>> pmath.sum(Tensor(np.ones((2, 3)))).to_dot().count(" -> ")
+        1
+        """
+        # Imported here rather than at module scope because `pynn.viz` reads the tape
+        # and so imports this module. A deferred import in a method nobody calls in a
+        # training loop is the cheaper half of that trade.
+        from pynn.viz import DEFAULT_MAX_NODES, to_dot
+
+        cap = DEFAULT_MAX_NODES if max_nodes is None else max_nodes
+        return to_dot(self, parameters, cap)
 
     def transpose(self, axes: tuple[int, ...] | None = None) -> Tensor:
         output = Tensor(np.transpose(self.data, axes))

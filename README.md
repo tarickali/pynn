@@ -19,6 +19,7 @@ tape are written up in [`docs/DESIGN.md`](docs/DESIGN.md).
 - **Layers** — `Linear`, `Conv2d`, `MaxPool2d`, `AvgPool2d`, `Dropout`, `LayerNorm`, `BatchNorm1d`/`BatchNorm2d`, `Embedding`, `RNNCell`, `LSTMCell`, `Flatten`, and a generic `Activation` wrapper. `Sequential` is itself a `Module`, so containers nest; `ModuleList` and `ModuleDict` hold layers whose wiring you decide.
 - **Module tree** — recursive `named_parameters()`, `state_dict()`/`load_state_dict()`, `save`/`load`, `train()`/`eval()` mode propagation, and `freeze()`/`unfreeze()` that the optimizers honor. Assigning a plain list of layers to an attribute raises rather than silently leaving them untrained.
 - **Autodiff controls** — `no_grad()` for inference that builds no graph, `Tensor.detach()`, and `requires_grad` tracking.
+- **Graph visualizer** — `Tensor.to_dot()` walks the tape and emits Graphviz DOT: one node per tensor, labelled with the operation that produced it and its shape, with parameters named from the model. It emits text and stops there, so nothing new is installed to produce it — rendering is `dot -Tsvg`, or `graphviz.Source(...)` in a notebook.
 - **Differentiable indexing** — slicing, gathering, and boolean masks stay on the tape, alongside `concat` / `stack` / `split`, `where` / `masked_fill`, and `Tensor.reshape`. Backpropagation through time works because of it: `backward` uses an explicit stack, so a 300-step unrolled cell differentiates without touching the recursion limit.
 - **Activations** — Identity, ReLU (and LeakyReLU), Sigmoid, Tanh, Softmax and LogSoftmax (with configurable axis), ELU, SELU, GELU (exact and tanh), SiLU/Swish, SoftPlus, Affine, and PReLU — a *learnable* activation, which is a `Module` so its slope reaches the optimizer.
 - **Losses** — Binary and categorical cross-entropy (logits or probabilities, one-hot or integer labels), mean squared error, mean absolute error, and Huber/SmoothL1. Every loss takes `reduction='mean' | 'sum' | 'none'`.
@@ -102,6 +103,7 @@ optimizer.update()
 | **`pynn.optim`** | `SGD`, `Adam`, `AdamW`, `RMSprop`, `Adagrad`, `Adadelta`; `StepLR`, `ExponentialLR`, `CosineAnnealingLR`; `clip_grad_norm`, `clip_grad_value`. |
 | **`pynn.utils`** | `one_hot`, `get_batches` (shuffled by default), `make_pair`, `pad_for_conv`, `im2col` / `col2im`, `get_data_and_grad`. |
 | **`pynn.verify`** | Self-verification suite: `check_gradients` and `numerical_gradient` for your own operations, plus `check_all_gradients`, `check_stability`, `check_invariants`, and `run_all`. |
+| **`pynn.viz`** | `to_dot` — Graphviz DOT for the tape behind a Tensor, also reachable as `Tensor.to_dot()`. |
 
 Activations and initializers can be specified by string in layers (e.g. `activation="relu"`, `weight_initializer="he_normal"`) or constructed via the factories.
 
@@ -191,7 +193,7 @@ pip install -e ".[hooks]" && pre-commit install
 Every push and pull request to `main` runs the same checks across Python
 3.10–3.14 on GitHub Actions: `ruff check`, `ruff format --check`, `mypy`,
 `pytest -m "not external" --cov=pynn`, and `python -m pynn.verify`. Coverage is held
-to a **95% floor** (`fail_under` in `[tool.coverage.report]`), currently at 98.6%, so
+to a **95% floor** (`fail_under` in `[tool.coverage.report]`), currently at 98.4%, so
 it cannot regress silently. The workflow lives at
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
@@ -239,10 +241,10 @@ python -m pynn.verify stability    # one suite
 
 ```
 gradients: 209/209 passed (OK)
-invariants: 107/107 passed (OK)
+invariants: 108/108 passed (OK)
 stability: 24/24 passed (OK)
 
-pynn.verify: 340/340 passed (OK)
+pynn.verify: 341/341 passed (OK)
 ```
 
 Three suites:

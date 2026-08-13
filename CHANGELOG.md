@@ -8,6 +8,19 @@ While the major version is 0, the public API may change between minor versions.
 
 ## [Unreleased]
 
+### Added
+
+- **`pynn.viz`.** `to_dot(tensor, parameters=None, max_nodes=200)` walks the tape behind
+  a Tensor and returns Graphviz DOT — one node per tensor, labelled with the operation
+  that produced it and its shape, rounded for a computed node and squared off for a
+  leaf, with parameters named from the model and filled differently again. Nodes are
+  identified by `id()`, the same way `backward`'s visited set is, so a tensor with two
+  consumers appears once with an edge to each. `max_nodes` caps the drawing and a marker
+  node reports how much was cut; the walk is breadth-first from the output, so what a cap
+  keeps is the part nearest the loss. Emitting text is the whole of it: nothing shells
+  out to Graphviz or imports the `graphviz` package, and rendering stays the caller's.
+  `Tensor.to_dot()` is a facade over it.
+
 ## [0.1.0] - 2026-08-12
 
 First release. There is no earlier published version, so everything below is new — this

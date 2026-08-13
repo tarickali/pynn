@@ -68,7 +68,7 @@ pip install -e ".[hooks]"      # pre-commit — see section 3
 ```bash
 python -c "import pynn; print(pynn.__file__)"       # works from any directory
 python -c "import pynn; print(pynn.__version__)"    # 0.1.0
-python -m pynn.verify                               # 340/340 passed (OK)
+python -m pynn.verify                               # 341/341 passed (OK)
 ```
 
 `requirements-dev.txt` installs the library in editable mode, so `pynn` imports from
@@ -85,9 +85,9 @@ pytest --cov=pynn                   # + coverage, enforces the 95% floor
 pytest --cov=pynn --cov-report=term-missing   # + which lines are uncovered
 ```
 
-**Expected:** `790 passed, 1 skipped, 6 deselected` · `Total coverage: ~98.3%`
+**Expected:** `807 passed, 1 skipped, 6 deselected` · `Total coverage: ~98.4%`
 
-On Python 3.10 it is `788 passed, 3 skipped`: two of the packaging checks parse
+On Python 3.10 it is `805 passed, 3 skipped`: two of the packaging checks parse
 `pyproject.toml`, and `tomllib` is standard library only from 3.11.
 
 Narrower runs:
@@ -98,6 +98,7 @@ pytest tests/core/module_test.py    # the module tree
 pytest tests/nn/layers_test.py      # Dropout, LayerNorm, BatchNorm, pooling
 pytest tests/nn/containers_test.py  # ModuleList and ModuleDict
 pytest tests/nn/recurrent_test.py    # Embedding, RNNCell, LSTMCell
+pytest tests/viz_test.py            # the DOT dump of the tape
 pytest -k "batch_norm"              # anything matching a name
 pytest -x -q                        # stop at the first failure
 ```
@@ -124,10 +125,10 @@ python -m pynn.verify stability invariants  # several
 
 ```
 gradients: 209/209 passed (OK)
-invariants: 107/107 passed (OK)
+invariants: 108/108 passed (OK)
 stability: 24/24 passed (OK)
 
-pynn.verify: 340/340 passed (OK)
+pynn.verify: 341/341 passed (OK)
 ```
 
 Exit code is 0 on success, 1 on any failure, so it works as a CI gate.
@@ -154,8 +155,8 @@ ruff format --check pynn tests examples scripts benchmarks # check only, no writ
 mypy                                                       # files configured in pyproject
 ```
 
-**Expected:** `All checks passed!` · `77 files already formatted` · `Success: no issues
-found in 44 source files`
+**Expected:** `All checks passed!` · `90 files already formatted` · `Success: no issues
+found in 51 source files`
 
 Ruff covers the **code cells of `examples/mnist.ipynb`** too — it parses `.ipynb`
 natively. `ruff format` on a notebook rewrites cell sources and leaves outputs alone.
