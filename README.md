@@ -118,10 +118,20 @@ Activations and initializers can be specified by string in layers (e.g. `activat
 
 ## Examples
 
-From the project root:
+Two notebooks are committed **with their outputs**, so they render inline on GitHub
+without being run — one per domain, because "it classifies images" and "it models
+sequences" are different claims:
 
-The [MNIST notebook](examples/mnist.ipynb) renders inline on GitHub: training curves,
-a confusion matrix, and the learned first-layer filters.
+- [**MNIST**](examples/mnist.ipynb) — an MLP to ~98% test accuracy with training curves,
+  a confusion matrix, and the learned first-layer filters, then the same data through a
+  `Conv2d` / `BatchNorm2d` / `MaxPool2d` network.
+- [**A character-level language model**](examples/char_rnn.ipynb) — `Embedding` →
+  `LSTMCell` unrolled over a 64-character window → `Linear`, trained on Tiny Shakespeare
+  with `AdamW` and `clip_grad_norm`. Text sampled at six checkpoints, so the progression
+  from noise to something word-shaped is visible rather than asserted, and what clipping
+  actually did over the run.
+
+Scripts, from the project root:
 
 ```bash
 # Regression
@@ -134,6 +144,10 @@ python -m examples.binary_classification
 # Uses examples/data/mnist/train.csv if present (see scripts/download_mnist.py),
 # otherwise falls back to synthetic data.
 python -m examples.mnist
+
+# The corpora the notebooks read. examples/data/ is gitignored.
+python scripts/download_mnist.py         # ~227 MB
+python scripts/download_shakespeare.py   # ~1.1 MB, stdlib only
 ```
 
 Or run the Quick Start example:
@@ -185,7 +199,7 @@ mypy                  # type check (files are configured in pyproject.toml)
 ```
 
 `ruff check` and `mypy` are both clean across `pynn`, `tests`, `examples`,
-`scripts`, and `benchmarks` — including the code cells of `examples/mnist.ipynb`.
+`scripts`, and `benchmarks` — including the code cells of both notebooks.
 Both are pinned to exact versions, since a newer `ruff format` can reformat code that
 is clean today and turn a repository nobody touched red.
 

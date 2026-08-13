@@ -9,6 +9,10 @@ section that used to lead this file. Items 1-4 are independent and can be picked
 any order or dropped; the sequence-modelling section at the end is a dependency chain,
 and is future work rather than queued work.
 
+Item 4 is the exception to "nice to have". It is not a correctness bug — no gradient is
+wrong and no test fails — but it is a measured resource problem with a workaround already
+in the repository, which makes it the one item here that has already cost something.
+
 ---
 
 ## Nice to have
@@ -79,12 +83,65 @@ memory movement with no arithmetic, where NumPy's copy is already a tuned memcpy
 is no interpreter overhead to remove. Better addressed by avoiding the transpose than by
 compiling the copy.
 
-### 4. A second example domain
+### 4. Reclaim the tape without waiting for the cyclic collector
 
-A char-level RNN on a small text file, or an MLP autoencoder on MNIST with a
-reconstruction grid. Shows the library generalizes past classification. Everything the
-recurrent version needs is now in place — `Embedding`, `LSTMCell`, differentiable
-slicing, and `SparseCategoricalCrossentropy` — so this is mostly a notebook and a corpus.
+Found while writing `examples/char_rnn.ipynb`, and the reason that notebook calls
+`gc.collect()` inside its training loop.
+
+Every Tensor holds its reverse pass as a closure that references the Tensor it belongs
+to, so a finished graph is a reference cycle. Dropping the last name pointing at the loss
+frees nothing — only Python's cyclic collector can, and CPython decides when to run a
+full collection from how much the *object count* has grown, which bears no relation to
+the hundreds of megabytes of NumPy arrays hanging off those objects.
+
+Measured on that notebook's model — batch 32, a 64-step unrolled LSTM, roughly 150 MB of
+graph per step — over 400 steps, a fresh process per row:
+
+| | ms/step | peak RSS |
+| --- | --- | --- |
+| left to CPython | 242.0 | 3,813 MB |
+| `gc.collect()` every 16 steps | 78.8 | 2,426 MB |
+| `gc.collect()` every 8 steps | 82.6 | 2,129 MB |
+| `gc.collect()` every 4 steps | **75.6** | 1,633 MB |
+| `gc.collect()` every 2 steps | 93.1 | 1,392 MB |
+
+**The interesting column is the first one, not the second.** Collecting is up to 3.2x
+*faster* — allocating against a heap that is mostly garbage costs more than sweeping it.
+The differences between the cadences are close to run-to-run noise; the difference
+between any cadence and none is not. Four was chosen because it has the lowest peak among
+the fast ones.
+
+The effect only appears once enough has accumulated, which is its own trap: the same
+benchmark over **60** steps reports 82.3 ms/step for the uncollected run and 88.0 with
+`gc.collect()` every 4, i.e. it says collecting costs 7% and should be removed. A short
+benchmark gets this exactly backwards.
+
+A feedforward model never notices any of it — its graph is a few dozen nodes. Anything
+that unrolls a recurrence does, and an earlier draft of the notebook, at batch 64, was
+killed by the OS at 7 GB.
+
+The fix is to break the cycle once `backward` is done with a node — clear its `reverse`
+and `children` as the traversal passes it. **Nothing in `tests/` or `pynn/verify` would
+break**: that was checked rather than assumed. The one invariant about accumulation runs
+two separate forward passes over the same leaves rather than calling `backward` twice on
+one graph, and the only repeated `backward()` on a single tensor in the suite is
+`tests/nn/losses_test.py::test_an_unreduced_loss_needs_an_explicit_backward_seed`, whose
+first call raises before touching the graph.
+
+It would still be a behaviour change rather than a patch, since re-running one graph is
+a thing a caller may reasonably expect to work — PyTorch spells the same trade
+`retain_graph`. Options, in increasing order of commitment:
+
+- Document it. That is where it stands today, in `USAGE.md` §5.
+- A `Tensor.free_graph()` the caller invokes after `backward`, clearing `reverse` and
+  `children` over the same topological order. No default behaviour changes, and the
+  notebook's `gc.collect()` becomes one call with no cadence to tune.
+- `backward(retain_graph=False)` as the default, matching PyTorch. Cheapest for the
+  common case and the largest change to what already works.
+
+Worth pairing with an invariant either way: after whichever call frees the graph, the
+loss's `children` are empty and a second `backward` raises rather than silently
+computing something wrong.
 
 ---
 
@@ -172,9 +229,10 @@ the loop, so a caller who does not need a custom one does not have to write it.
 - **`TransformerDecoderLayer` / `TransformerDecoder`** with causal masking and
   cross-attention, if a generative example is wanted.
 - **An example** is what makes this worth having: a small character-level or
-  toy-translation transformer, in the shape of `examples/mnist.ipynb`. Item 4's char-RNN
-  notebook would make a natural companion — the same task, two architectures, honestly
-  compared.
+  toy-translation transformer, in the shape of `examples/mnist.ipynb`.
+  `examples/char_rnn.ipynb` already makes the natural companion — same corpus, same
+  vocabulary, same batching, so a transformer notebook could be held to its numbers
+  directly rather than compared by anecdote.
 
 ### Scope note
 
@@ -207,6 +265,9 @@ Recorded so this file does not re-propose them. Details in `PROJECT_REVIEW.md` P
 - im2col `conv2d`, and the JIT-compiled `col2im` scatter behind the `numba` extra
 - CI across Python 3.10–3.14, coverage floor, `scripts/ci_matrix.sh`
 - `docs/DESIGN.md`, benchmarks, the executed MNIST notebook
+- A second example domain: `examples/char_rnn.ipynb`, a character-level LSTM on Tiny
+  Shakespeare (`scripts/download_shakespeare.py`), executed and committed with its
+  outputs. It turned up item 4 above and needed no library code
 - `CONTRIBUTING.md` (the how-to-add-a-layer walkthrough), `CHANGELOG.md`, and the
   annotated `v0.1.0` tag — created locally, not pushed
 - `py.typed` shipped as package data, and `pynn.__version__` as the single source of the

@@ -20,6 +20,15 @@ While the major version is 0, the public API may change between minor versions.
   keeps is the part nearest the loss. Emitting text is the whole of it: nothing shells
   out to Graphviz or imports the `graphviz` package, and rendering stays the caller's.
   `Tensor.to_dot()` is a facade over it.
+- **A second example domain**, `examples/char_rnn.ipynb`: a character-level language
+  model on Tiny Shakespeare, executed and committed with its outputs. `Embedding` →
+  `LSTMCell` unrolled over a 64-character window → `Linear`, trained with `AdamW`,
+  `CosineAnnealingLR`, and `clip_grad_norm`, with text sampled at six checkpoints, a
+  temperature-controlled sampler, and the model's learned character transitions checked
+  against the corpus's own bigram statistics. No library code was needed to write it —
+  `Embedding`, `LSTMCell`, differentiable slicing, and `SparseCategoricalCrossentropy`
+  already covered it. `scripts/download_shakespeare.py` fetches the corpus using nothing
+  but the standard library.
 - **A tape figure**, `docs/tape.svg`, at the top of the README and in `docs/DESIGN.md`
   §2 — the fifteen nodes a two-layer MLP and a squared-error loss actually leave behind.
   `python scripts/generate_tape_figure.py` regenerates it; only that script needs

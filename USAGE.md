@@ -155,11 +155,12 @@ ruff format --check pynn tests examples scripts benchmarks # check only, no writ
 mypy                                                       # files configured in pyproject
 ```
 
-**Expected:** `All checks passed!` · `91 files already formatted` · `Success: no issues
+**Expected:** `All checks passed!` · `93 files already formatted` · `Success: no issues
 found in 51 source files`
 
-Ruff covers the **code cells of `examples/mnist.ipynb`** too — it parses `.ipynb`
-natively. `ruff format` on a notebook rewrites cell sources and leaves outputs alone.
+Ruff covers the **code cells of `examples/mnist.ipynb` and `examples/char_rnn.ipynb`**
+too — it parses `.ipynb` natively. `ruff format` on a notebook rewrites cell sources and
+leaves outputs alone.
 Mypy is scoped to `pynn/` only (`files = ["pynn"]`).
 
 `ruff` and `mypy` are pinned to exact versions in `pyproject.toml`, not floors. They are
@@ -219,17 +220,24 @@ python -m examples.mnist                # needs [mnist]; real data if present, e
 **Expected:** smoke test prints `Smoke test passed: ...`; binary classification reaches
 `Accuracy: 1.0000`; MNIST reaches ~98% test accuracy on the real dataset.
 
-### MNIST data
+### Data
 
-`examples/data/` is gitignored, so the CSV is not in the repository.
+`examples/data/` is gitignored, so neither corpus is in the repository.
 
 ```bash
 python scripts/download_mnist.py        # writes examples/data/mnist/train.csv (~227 MB)
+python scripts/download_shakespeare.py  # writes examples/data/shakespeare/input.txt
 ```
 
 `examples/mnist.py` falls back to synthetic data when the file is absent;
 `examples/mnist.ipynb` raises with instructions instead, because a notebook of synthetic
-results would be misleading.
+results would be misleading. `examples/char_rnn.ipynb` raises for the same reason.
+
+The Shakespeare script needs nothing beyond the standard library — the corpus is one
+plain text file over HTTP, and it is ~1.1 MB, so it is quick enough that the notebook
+does not cache anything beyond the file itself. It refuses a response under 1 MB rather
+than writing it, since a truncated transfer or an error page would otherwise be trained
+on without complaint.
 
 ### The tape figure
 
@@ -248,14 +256,15 @@ graphviz`). Without it the DOT is still written, the script says so, and it exit
 
 ---
 
-## 5. The notebook
+## 5. The notebooks
 
-`examples/mnist.ipynb` is committed **with its outputs**, so it renders on GitHub without
-being run. Only re-run it if you change it.
+Both are committed **with their outputs**, so they render on GitHub without being run.
+Only re-run one if you change it.
 
 ```bash
 pip install -e ".[notebook]"
 jupyter lab examples/mnist.ipynb
+jupyter lab examples/char_rnn.ipynb
 ```
 
 To re-execute headlessly and write the outputs back in place:
@@ -264,21 +273,33 @@ To re-execute headlessly and write the outputs back in place:
 python - <<'PY'
 import nbformat
 from nbclient import NotebookClient
-nb = nbformat.read("examples/mnist.ipynb", as_version=4)
+path = "examples/mnist.ipynb"          # or examples/char_rnn.ipynb
+nb = nbformat.read(path, as_version=4)
 NotebookClient(nb, timeout=1800, kernel_name="python3",
                resources={"metadata": {"path": "."}}).execute()
-nbformat.write(nb, "examples/mnist.ipynb")
+nbformat.write(nb, path)
 PY
 ```
 
-Takes about 5 minutes: ~40 s for the MLP, ~3 min for the CNN, the rest is plotting.
-`kernel_name="python3"` is the kernel the notebook itself records, and inside this
+`mnist.ipynb` takes about 5 minutes: ~40 s for the MLP, ~3 min for the CNN, the rest is
+plotting. `char_rnn.ipynb` is about the same, nearly all of it the LSTM's training loop.
+`kernel_name="python3"` is the kernel the notebooks themselves record, and inside this
 virtualenv it resolves to this project's interpreter — see [section 9](#9-jupyter-kernels).
+
+`char_rnn.ipynb` calls `gc.collect()` on a cadence inside its training loop, and that is
+deliberate rather than superstition. Each Tensor holds its reverse pass as a closure over
+itself, so a finished graph is a reference cycle that only the cyclic collector can free;
+one step of a 64-step unrolled LSTM is ~150 MB, and CPython's heuristic for running a full
+collection counts objects rather than bytes. Over 400 steps, leaving it alone runs at 242
+ms/step and peaks at 3.8 GB; collecting every fourth step runs at 76 ms/step and peaks at
+1.6 GB — **3.2x faster**, because allocating against a heap that is mostly garbage costs
+more than sweeping it. Anything that unrolls a long recurrence will want the same line —
+`TASKS.md` item 4 has the cadence table and the fix.
 
 After editing cells, re-lint and re-format before committing:
 
 ```bash
-ruff format examples/mnist.ipynb && ruff check examples/mnist.ipynb
+ruff format examples/char_rnn.ipynb && ruff check examples/char_rnn.ipynb
 ```
 
 ---
@@ -401,9 +422,9 @@ $ jupyter kernelspec list
 ```
 
 That `python3` comes from `ipykernel` inside `.venv`, so it resolves to this project's
-Python whenever Jupyter runs from the activated environment. It is also the kernel
-`examples/mnist.ipynb` records in its metadata, so the notebook opens and runs with no
-special-casing — for you, and for anyone who clones the repository.
+Python whenever Jupyter runs from the activated environment. It is also the kernel both
+notebooks record in their metadata, so they open and run with no special-casing — for
+you, and for anyone who clones the repository.
 
 If a virtualenv ever lacks a kernel, this recreates one scoped to it:
 
@@ -527,7 +548,8 @@ reliably on it, so without a fallback the dependency fails to resolve.
 | Benchmarks | `python -m benchmarks.benchmark --markdown` |
 | Build the artifacts | `python -m build && twine check dist/*` |
 | MNIST data | `python scripts/download_mnist.py` |
-| Notebook | `jupyter lab examples/mnist.ipynb` |
+| Shakespeare corpus | `python scripts/download_shakespeare.py` |
+| Notebooks | `jupyter lab examples/mnist.ipynb examples/char_rnn.ipynb` |
 | Full install | `pip install -r requirements-dev.txt` |
 | CI on every Python | `scripts/ci_matrix.sh` |
 | Refresh READ_FILES.md | `python scripts/generate_read_files.py` |
