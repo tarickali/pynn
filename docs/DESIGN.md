@@ -490,10 +490,10 @@ fail a shape test, and none of them fail a "did the loss go down" test.
 
 Three suites:
 
-- **`check_all_gradients`** — 151 checks. Every operator across broadcasting shape
+- **`check_all_gradients`** — 209 checks. Every operator across broadcasting shape
   combinations, every activation at normal *and* overflow-scale magnitudes, every loss in
   both its logits and probability forms, every module function across strides and
-  paddings, and nine graph topologies where a tensor has more than one consumer. Central
+  paddings, and eight graph topologies where a tensor has more than one consumer. Central
   differences, `(f(x+h) - f(x-h)) / 2h`, on float64, with relative error scaled by the sum
   of magnitudes so the check stays meaningful for near-zero gradients.
 - **`check_stability`** — finiteness far past where `exp` overflows.
