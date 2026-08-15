@@ -68,7 +68,7 @@ pip install -e ".[hooks]"      # pre-commit — see section 3
 ```bash
 python -c "import pynn; print(pynn.__file__)"       # works from any directory
 python -c "import pynn; print(pynn.__version__)"    # 0.1.0
-python -m pynn.verify                               # 341/341 passed (OK)
+python -m pynn.verify                               # 345/345 passed (OK)
 ```
 
 `requirements-dev.txt` installs the library in editable mode, so `pynn` imports from
@@ -85,9 +85,9 @@ pytest --cov=pynn                   # + coverage, enforces the 95% floor
 pytest --cov=pynn --cov-report=term-missing   # + which lines are uncovered
 ```
 
-**Expected:** `807 passed, 1 skipped, 6 deselected` · `Total coverage: ~98.4%`
+**Expected:** `816 passed, 1 skipped, 6 deselected` · `Total coverage: ~98.4%`
 
-On Python 3.10 it is `805 passed, 3 skipped`: two of the packaging checks parse
+On Python 3.10 it is `814 passed, 3 skipped`: two of the packaging checks parse
 `pyproject.toml`, and `tomllib` is standard library only from 3.11.
 
 Narrower runs:
@@ -125,10 +125,10 @@ python -m pynn.verify stability invariants  # several
 
 ```
 gradients: 209/209 passed (OK)
-invariants: 108/108 passed (OK)
+invariants: 112/112 passed (OK)
 stability: 24/24 passed (OK)
 
-pynn.verify: 341/341 passed (OK)
+pynn.verify: 345/345 passed (OK)
 ```
 
 Exit code is 0 on success, 1 on any failure, so it works as a CI gate.
@@ -155,7 +155,7 @@ ruff format --check pynn tests examples scripts benchmarks # check only, no writ
 mypy                                                       # files configured in pyproject
 ```
 
-**Expected:** `All checks passed!` · `93 files already formatted` · `Success: no issues
+**Expected:** `All checks passed!` · `94 files already formatted` · `Success: no issues
 found in 51 source files`
 
 Ruff covers the **code cells of `examples/mnist.ipynb` and `examples/char_rnn.ipynb`**
@@ -286,15 +286,38 @@ plotting. `char_rnn.ipynb` is about the same, nearly all of it the LSTM's traini
 `kernel_name="python3"` is the kernel the notebooks themselves record, and inside this
 virtualenv it resolves to this project's interpreter — see [section 9](#9-jupyter-kernels).
 
-`char_rnn.ipynb` calls `gc.collect()` on a cadence inside its training loop, and that is
+`char_rnn.ipynb` calls `loss.free_graph()` inside its training loop, and that is
 deliberate rather than superstition. Each Tensor holds its reverse pass as a closure over
-itself, so a finished graph is a reference cycle that only the cyclic collector can free;
-one step of a 64-step unrolled LSTM is ~150 MB, and CPython's heuristic for running a full
-collection counts objects rather than bytes. Over 400 steps, leaving it alone runs at 242
-ms/step and peaks at 3.8 GB; collecting every fourth step runs at 76 ms/step and peaks at
-1.6 GB — **3.2x faster**, because allocating against a heap that is mostly garbage costs
-more than sweeping it. Anything that unrolls a long recurrence will want the same line —
-`TASKS.md` item 4 has the cadence table and the fix.
+itself, so a finished graph is a reference cycle that nothing reclaims on its own; one
+step of a 64-step unrolled LSTM is ~150 MB, and CPython's heuristic for running a full
+collection counts objects rather than bytes. `free_graph` clears each node's `children`
+and `reverse` over the order `backward` walks, which breaks every cycle, so reference
+counting takes the step's graph back before the next one is built. Measured over 400
+steps, a fresh process per row, with `python -m benchmarks.memory`:
+
+| | ms/step | peak RSS |
+| --- | --- | --- |
+| left to CPython | 242.0 | 3,813 MB |
+| `gc.collect()` every 4 steps | 79.1 | 1,806 MB |
+| `loss.free_graph()` | **81.0** | **860 MB** |
+| both | 82.1 | 918 MB |
+
+Leaving it alone is **3.0x slower**, because allocating against a heap that is mostly
+garbage costs more than sweeping it. `free_graph` matches the collector cadence on wall
+clock — the difference between those two rows is inside run-to-run variation — and halves
+the peak, since it hands the memory back at a known point rather than whenever the
+collector next runs. **Collecting on top of it buys nothing**, which is the expected
+result: there are no cycles left to find. The notebook used to call `gc.collect()` every
+fourth step and no longer does.
+
+Two traps if you re-measure. **Use at least 400 steps**: over 60 the same benchmark says
+the uncollected run is the fast one, because the cost of the garbage is the cost of
+allocating around it and that takes a while to show up. And **read peak RSS from `ps`**,
+not from `resource.getrusage`, which reported near-identical peaks here for
+configurations whose real peaks differed by more than 2 GB.
+
+Anything that unrolls a long recurrence will want the same line. A feedforward model
+will not notice either way — its graph is a few dozen nodes.
 
 After editing cells, re-lint and re-format before committing:
 
@@ -325,6 +348,25 @@ comparison columns blank.
 | CNN 2 conv + 2 pool | ~80 | ~8 | ~10x |
 
 Run-to-run variation is roughly ±15%. Re-measure before quoting new numbers in the README.
+
+### Memory
+
+A second harness, for the other resource:
+
+```bash
+python -m benchmarks.memory                    # every configuration, 400 steps each
+python -m benchmarks.memory --only none free   # a subset
+python -m benchmarks.memory --steps 800        # longer
+```
+
+It runs `examples/char_rnn.ipynb`'s model — batch 32, a 64-step unrolled `LSTMCell` — in
+a **fresh process per configuration**, sampling each child's RSS from `ps` while it runs,
+and reports mean ms/step and peak RSS. Needs only NumPy. The table it produces is the one
+in [section 5](#5-the-notebooks); the module docstring carries the two traps.
+
+Expect the uncollected configuration to want ~4 GB, and to be killed by the OS rather
+than merely run slowly on a machine that does not have it free. That is the failure this
+measures.
 
 ---
 
@@ -546,6 +588,7 @@ reliably on it, so without a fallback the dependency fails to resolve.
 | All of the above, pre-commit | `pre-commit run --all-files` |
 | Smoke test | `python scripts/smoke_test.py` |
 | Benchmarks | `python -m benchmarks.benchmark --markdown` |
+| Memory benchmark | `python -m benchmarks.memory` |
 | Build the artifacts | `python -m build && twine check dist/*` |
 | MNIST data | `python scripts/download_mnist.py` |
 | Shakespeare corpus | `python scripts/download_shakespeare.py` |

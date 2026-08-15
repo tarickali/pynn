@@ -1,7 +1,12 @@
+import contextlib
+import gc
+import weakref
+
 import numpy as np
 import pytest
 
 import pynn.core.math as pmath
+import pynn.functional as F
 from pynn.core import Tensor
 from pynn.core.types import Array
 
@@ -359,6 +364,164 @@ def test_an_ndarray_on_the_left_stays_on_the_tape(rng):
     pmath.sum(np.full((2, 3), 3.0) * x).backward()
 
     assert np.allclose(x.grad, 3.0)
+
+
+# --------------------------------------------------------------------------- #
+# free_graph
+#
+# A finished graph is a reference cycle — every reverse closure references the Tensor
+# it belongs to — so nothing reclaims it until the cyclic collector runs, which CPython
+# schedules from object counts rather than from the megabytes of arrays hanging off
+# them. `free_graph` breaks the cycles explicitly. The two things it must not do are
+# change a gradient and fail quietly.
+# --------------------------------------------------------------------------- #
+
+
+@contextlib.contextmanager
+def no_cyclic_collector():
+    """Run with CPython's cyclic collector off.
+
+    The claim under test is that reference counting alone reclaims a freed graph. With
+    the collector running, a collection triggered by unrelated allocation would satisfy
+    the assertion for the wrong reason.
+    """
+    enabled = gc.isenabled()
+    gc.disable()
+    try:
+        yield
+    finally:
+        if enabled:
+            gc.enable()
+
+
+def diamond(seed):
+    """A graph whose input feeds three consumers, and its leaves.
+
+    The shape that separates freeing correctly from freeing by luck: a single-consumer
+    chain is reclaimed by any traversal that reaches the end of it, and gives the same
+    gradients however the graph is torn down afterwards.
+    """
+    rng = np.random.default_rng(seed)
+    x = Tensor(rng.standard_normal((4, 3)))
+    w = Tensor(rng.standard_normal((3, 3)))
+    projected = x @ w
+    hidden = F.tanh(projected)
+    return x, w, pmath.sum(hidden * hidden + projected + x)
+
+
+def test_free_graph_leaves_the_gradients_a_reused_input_earned():
+    """Freeing must not disturb what backward computed, and the reuse is the point."""
+    x_kept, w_kept, kept = diamond(0)
+    kept.backward()
+
+    x_freed, w_freed, freed = diamond(0)
+    freed.backward()
+    freed.free_graph()
+
+    assert np.array_equal(x_freed.grad, x_kept.grad)
+    assert np.array_equal(w_freed.grad, w_kept.grad)
+    assert freed.item() == kept.item()
+
+
+def test_free_graph_empties_the_output_and_keeps_the_leaves():
+    x, w, loss = diamond(1)
+    loss.backward()
+    loss.free_graph()
+
+    assert loss.children == ()
+    # The leaves are the caller's: an optimizer is about to read those gradients.
+    assert x.children == () and np.any(x.grad != 0.0)
+    assert np.any(w.grad != 0.0)
+
+
+def test_free_graph_reclaims_the_tape_without_the_collector():
+    """The claim `free_graph` exists to make."""
+    with no_cyclic_collector():
+        x = Tensor(np.ones((2, 2)))
+        projected = x * 2.0
+        hidden = F.tanh(projected)
+        loss = pmath.sum(hidden * projected)
+        loss.backward()
+
+        alive = [weakref.ref(node) for node in (projected, hidden)]
+        del projected, hidden
+        assert all(reference() is not None for reference in alive)
+
+        loss.free_graph()
+        assert all(reference() is None for reference in alive)
+
+
+def test_a_finished_graph_is_not_reclaimed_on_its_own():
+    """The contrast, so the test above is not vacuously true."""
+    with no_cyclic_collector():
+        x = Tensor(np.ones((2, 2)))
+        hidden = F.tanh(x)
+        loss = pmath.sum(hidden)
+        loss.backward()
+
+        reference = weakref.ref(hidden)
+        del hidden
+
+        assert reference() is not None
+        assert loss is not None
+
+
+def test_backward_after_free_graph_raises():
+    """A freed graph that quietly returned zeros would look like a converged model."""
+    x, _, loss = diamond(2)
+    loss.backward()
+    recorded = x.grad.copy()
+    loss.free_graph()
+
+    with pytest.raises(RuntimeError, match="released by free_graph"):
+        loss.backward()
+
+    # Refused before anything was accumulated, seed included.
+    assert np.array_equal(x.grad, recorded)
+
+
+def test_backward_through_a_freed_node_raises():
+    """Freeing one graph poisons the tensors it shared, and must say so."""
+    x = Tensor(np.ones((2, 2)))
+    hidden = F.tanh(x)
+
+    first = pmath.sum(hidden)
+    first.backward()
+    first.free_graph()
+
+    with pytest.raises(RuntimeError, match="released by free_graph"):
+        pmath.sum(hidden * 3.0).backward()
+
+
+def test_free_graph_is_idempotent():
+    _, _, loss = diamond(3)
+    loss.backward()
+    loss.free_graph()
+    loss.free_graph()
+
+    assert loss.children == ()
+
+
+def test_free_graph_on_a_leaf_does_nothing():
+    x = Tensor(np.ones((2, 2)))
+    x.free_graph()
+
+    # Not marked as freed: a leaf holds no piece of the tape, and marking it would
+    # refuse every later graph built over the same parameter.
+    pmath.sum(x * 2.0).backward()
+    assert np.allclose(x.grad, 2.0)
+
+
+def test_freeing_each_step_still_accumulates_across_steps():
+    """The training-loop shape: new graph per step, same leaves, gradients add up."""
+    x = Tensor(np.ones((2, 2)))
+
+    for _ in range(3):
+        loss = pmath.sum(x * 2.0)
+        loss.backward()
+        loss.free_graph()
+
+    assert np.allclose(x.grad, 6.0)
 
 
 # --------------------------------------------------------------------------- #

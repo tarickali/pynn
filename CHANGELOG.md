@@ -10,6 +10,30 @@ While the major version is 0, the public API may change between minor versions.
 
 ### Added
 
+- **`Tensor.free_graph()`.** Releases the tape behind a Tensor by clearing each node's
+  `children` and `reverse` over the order `backward` walks. Every Tensor holds its
+  reverse pass as a closure that references the Tensor it belongs to, so a finished
+  graph is a reference cycle: dropping the last name pointing at a loss frees nothing,
+  and only CPython's cyclic collector can — which it schedules from object counts rather
+  than from the hundreds of megabytes of arrays hanging off those objects. Breaking the
+  cycles lets reference counting reclaim the graph immediately. `data` and `grad` are
+  untouched, so the parameters still carry the gradients the optimizer is about to read.
+  On `examples/char_rnn.ipynb`'s model over 400 steps — batch 32, a 64-step unrolled
+  `LSTMCell`, ~150 MB of graph per step — this is **242.0 ms/step at 3,813 MB peak RSS
+  without it against 81.0 ms/step at 860 MB with it**: 3.0x the throughput and 4.4x less
+  memory. It is a new method rather than a new default for `backward`, which is how
+  PyTorch spells the same trade, because re-running a graph is something a caller may
+  reasonably expect to work; the default can still be changed later, and cannot be
+  changed back quietly. `backward` refuses a graph that has been freed rather than
+  walking the stump and reporting zeros, which would be indistinguishable from a
+  converged model.
+- **`benchmarks/memory.py`.** `python -m benchmarks.memory` measures peak RSS and
+  throughput for that model under each way of dealing with the finished graph, in a
+  fresh process per configuration with RSS sampled from `ps`. Both of those are
+  load-bearing: a heap already grown by an earlier configuration does not shrink back,
+  and `resource.getrusage(...).ru_maxrss` reported near-identical peaks for
+  configurations whose real peaks differed by more than 2 GB. It defaults to 400 steps
+  because the same benchmark over 60 reports the opposite conclusion.
 - **`pynn.viz`.** `to_dot(tensor, parameters=None, max_nodes=200)` walks the tape behind
   a Tensor and returns Graphviz DOT — one node per tensor, labelled with the operation
   that produced it and its shape, rounded for a computed node and squared off for a
@@ -33,6 +57,15 @@ While the major version is 0, the public API may change between minor versions.
   §2 — the fifteen nodes a two-layer MLP and a squared-error loss actually leave behind.
   `python scripts/generate_tape_figure.py` regenerates it; only that script needs
   Graphviz, and it writes the DOT either way.
+
+### Changed
+
+- **`examples/char_rnn.ipynb` calls `loss.free_graph()`** where it used to call
+  `gc.collect()` every fourth step, and the paragraph explaining the cadence is now a
+  paragraph explaining the call. Collecting *on top* of `free_graph` measures 82.1
+  ms/step at 918 MB against 81.0 and 860, so there was nothing left for it to find and
+  the cadence went rather than being kept alongside. Re-executed; the losses and the
+  sampled text are unchanged to the digit, the wall clock moved from 3.5 to 3.6 minutes.
 
 ## [0.1.0] - 2026-08-12
 

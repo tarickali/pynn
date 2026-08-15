@@ -16,6 +16,9 @@ silently never train.
 
 from __future__ import annotations
 
+import gc
+import weakref
+
 import numpy as np
 
 import pynn.core.math as pmath
@@ -267,6 +270,59 @@ def check_autodiff() -> CheckReport:
         bool(np.all(detached.grad == 0.0)),
         f"max |grad| = {np.abs(detached.grad).max():.3g}",
     )
+
+    # `no_grad` above is how the tape is never built; this is how it is given back. A
+    # finished graph is a reference cycle, since every reverse closure references the
+    # Tensor it belongs to, so dropping the last name pointing at a loss frees nothing.
+    # `free_graph` breaks the cycles, and the property worth checking is that reference
+    # counting alone then reclaims the graph — waiting for the cyclic collector is the
+    # whole problem, and CPython schedules it from object counts rather than from the
+    # hundreds of megabytes of arrays hanging off those objects.
+    leaf = Tensor(np.ones((2, 2)))
+    projected = leaf * 2.0
+    finished = pmath.sum(F.tanh(projected) * projected)
+    finished.backward()
+    earned = leaf.grad.copy()
+
+    # Turned off so that reference counting is what the next check observes: a
+    # collection triggered by unrelated allocation would satisfy it for the wrong
+    # reason.
+    collecting = gc.isenabled()
+    gc.disable()
+    try:
+        intermediate = weakref.ref(projected)
+        del projected
+        retained = intermediate() is not None
+        finished.free_graph()
+        report.add(
+            "free_graph reclaims the tape without the cyclic collector",
+            retained and intermediate() is None,
+            f"held before free_graph: {retained}, "
+            f"reclaimed after: {intermediate() is None}",
+        )
+    finally:
+        if collecting:
+            gc.enable()
+
+    report.add(
+        "free_graph empties the freed output's children",
+        finished.children == (),
+        f"{len(finished.children)} children remain",
+    )
+    # Freeing the tape must not take the gradients with it — the optimizer reads them
+    # after the call, and zeros here would look exactly like a converged model.
+    report.add(
+        "free_graph leaves the gradients backward computed",
+        bool(np.any(earned != 0.0) and np.array_equal(leaf.grad, earned)),
+        f"{leaf.grad.tolist()}",
+    )
+    try:
+        finished.backward()
+        report.add(
+            "backward refuses a graph free_graph released", False, "no error raised"
+        )
+    except RuntimeError:
+        report.add("backward refuses a graph free_graph released", True)
 
     # A float32 input used to be upcast on the way in, and every gradient was float64
     # regardless of the data — twice the memory, silently.

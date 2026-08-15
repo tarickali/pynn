@@ -136,6 +136,9 @@ already there and never zeroes them, so gradient accumulation over micro-batches
 calling it twice. The corollary is that a training loop *must* call `zero_grad()`
 between steps.
 
+What it does *not* do is release the graph afterwards. That is `free_graph`, and §8 is
+about why it is a separate call.
+
 ## 4. Broadcasting, backwards
 
 Broadcasting is where from-scratch autodiff projects usually stop being correct, and it
@@ -378,6 +381,51 @@ all ~25 operation sites; the property keeps the gate in one place.
 
 `backward()` on a tensor produced under `no_grad`, or on one that has been `detach`ed,
 raises rather than quietly returning zeros.
+
+### Giving the tape back
+
+`no_grad` is how a tape is never built. The other half of the problem is a tape that
+*was* built, has been differentiated, and is now dead weight.
+
+Going out of scope does not free it. Every Tensor's `reverse` is a closure that
+references the Tensor it belongs to, so a finished graph is a **reference cycle** and
+dropping the last name pointing at a loss frees nothing. Only the cyclic collector can,
+and CPython schedules a full collection from how much the *object count* has grown — a
+number with no relation to the hundreds of megabytes of NumPy arrays hanging off those
+objects. A feedforward graph is a few dozen nodes and nobody ever notices. A 64-step
+unrolled LSTM at batch 32 is about 150 MB per step, and over 400 steps the difference is
+242 ms/step peaking at 3,813 MB against 81 ms/step peaking at 860 MB.
+
+The **speed** column is the surprising one, since a garbage-collection pause in a
+training loop is supposed to cost rather than pay. Allocating against a heap that is
+mostly garbage is more expensive than not having the garbage — three times more, here.
+And it only appears at scale: the same benchmark over 60 steps reports the uncollected
+run as the fast one, which is exactly the length of benchmark somebody writes to check.
+
+`Tensor.free_graph()` clears each node's `children` and `reverse` over the order
+`backward` walks. That breaks every cycle, so reference counting reclaims the graph as
+the call returns and no collection happens at all. `data` and `grad` are untouched, so
+the parameters still carry the gradients the optimizer is about to read, and the loss is
+still a number you can print.
+
+**Why a method rather than a default.** PyTorch spells this `backward(retain_graph=False)`
+and frees as the reverse pass goes, which is cheaper — no second traversal — and is the
+right default for a library whose users already expect it. It is also a behaviour change:
+re-running one graph is something a caller may reasonably expect to work, and every
+caller who does would break at once. An explicit `free_graph()` changes nothing that
+works today and costs one extra topological sort — 0.85 ms against a 79 ms step on the
+model above, about 1%. It can still *become* the default later, once there is evidence
+that nobody depends on the old behaviour. The reverse move, shipping the default and
+walking it back, is the one that cannot be made quietly.
+
+**And it has to fail loudly.** A freed node still has a `reverse` — the one that does
+nothing — so a second `backward` would walk the stump, find no children, and report
+zeros. That is not a crash; it is a converged model. `backward` therefore scans the
+order for a freed node before accumulating anything and raises if it finds one, which
+costs 0.03 ms on the graph above. Scanning the whole order rather than only the tensor
+it was called on catches the subtler case too: freeing one loss poisons any tensor it
+shared with a graph still in use, and the error says so rather than letting the second
+loss train on nothing.
 
 ## 9. Numerical stability
 

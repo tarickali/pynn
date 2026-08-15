@@ -88,6 +88,10 @@ class Tensor:
         self._reverse: Callable[[], None] = _no_reverse
 
         self.children: tuple[Tensor, ...] = ()
+        #: Whether `free_graph` has cleared this Tensor's edges. `backward` refuses to
+        #: run through a freed node rather than reporting the zeros it would otherwise
+        #: compute, which is indistinguishable from a converged model.
+        self._freed = False
         #: Whether this Tensor is connected to the graph. False for one produced under
         #: `no_grad` or by `detach`, which is what makes `backward` on it an error
         #: rather than a silent zero.
@@ -169,7 +173,8 @@ class Tensor:
             or if the seed gradient's shape does not match.
         RuntimeError
             If this tensor is not connected to the graph, because it was produced
-            under `no_grad` or detached from it.
+            under `no_grad` or detached from it, or if the graph behind it has
+            already been released by `free_graph`.
         """
 
         if not self.requires_grad:
@@ -197,11 +202,74 @@ class Tensor:
                     f"{self.data.shape}"
                 )
 
+        order = self._topological_order()
+        # Checked before anything is accumulated, so a refused pass leaves every
+        # gradient exactly as it found it. A freed node still has a `reverse` — the
+        # one that does nothing — so without this the pass would run to completion and
+        # report zeros for everything behind it.
+        if any(tensor._freed for tensor in order):
+            raise RuntimeError(
+                "backward() through a Tensor whose tape has already been released by "
+                "free_graph(). The reverse pass would stop at that node and report "
+                "zero gradients for everything behind it, which is indistinguishable "
+                "from a converged model, so it is refused instead. Run the forward "
+                "pass again to build a graph, or do not free one still in use."
+            )
+
         self.grad = self.grad + seed
 
-        for tensor in reversed(self._topological_order()):
+        for tensor in reversed(order):
             if tensor.requires_grad:
                 tensor.reverse()
+
+    def free_graph(self) -> None:
+        """Release the tape behind this Tensor without waiting for the collector.
+
+        Every Tensor holds its reverse pass as a closure that references the Tensor it
+        belongs to, so a finished graph is a reference *cycle*. Dropping the last name
+        pointing at a loss therefore frees nothing: only CPython's cyclic collector
+        can, and it decides when to run a full collection from how much the object
+        *count* has grown — a number that bears no relation to the hundreds of
+        megabytes of arrays hanging off those objects. A feedforward model never
+        notices, since its graph is a few dozen nodes; anything that unrolls a
+        recurrence accumulates finished graphs until something forces a collection.
+
+        Clearing each node's `children` and `reverse` over the order `backward` walks
+        breaks every one of those cycles, so reference counting reclaims the graph as
+        this returns. Nothing else is touched — `data` and `grad` survive, so the
+        parameters still carry the gradients the optimizer is about to read, and the
+        loss is still a number you can print.
+
+        Call it once the backward pass is done with the graph::
+
+            loss.backward()
+            loss.free_graph()
+            optimizer.update()
+
+        Afterwards the graph is gone, so `backward` on any Tensor in it raises rather
+        than quietly reporting zeros. Freeing a graph twice, or freeing a Tensor with
+        no graph behind it, does nothing.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> import pynn.core.math as pmath
+        >>> loss = pmath.sum(Tensor(np.ones((2, 3))) * 2.0)
+        >>> loss.backward()
+        >>> loss.free_graph()
+        >>> loss.children
+        ()
+        """
+        # The order is built in full before anything is cleared. Clearing edges during
+        # the walk would cut the walk short of the nodes reachable only through them,
+        # which is invisible in a chain and loses half a diamond.
+        for tensor in self._topological_order():
+            # A node with no children is a leaf — an input or a parameter the caller
+            # still owns, holding no piece of the tape and no cycle to break.
+            if tensor.children:
+                tensor.children = ()
+                tensor._reverse = _no_reverse
+                tensor._freed = True
 
     def _topological_order(self) -> list[Tensor]:
         """Tensors in this graph, children before parents.
