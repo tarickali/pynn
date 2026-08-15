@@ -14,15 +14,24 @@ Copy one prompt verbatim into a fresh agent session.
 | --- | --- | --- |
 | ~~A — Packaging and process~~ | — | **done** |
 | B — Testing, layers, performance | 1, 2, 3 | large |
-| C — A second example domain | 4 | medium, one notebook |
+| ~~C — A second example domain~~ | — | **done** |
 | ~~D — Graph visualizer~~ | — | **done** |
+| E — Reclaim the tape | 4 | small, but it is an API decision |
 
-Prompts A and D are finished and their sections removed. A produced `CONTRIBUTING.md`,
+Prompts A, C, and D are finished and their sections removed. A produced `CONTRIBUTING.md`,
 `CHANGELOG.md`, the annotated `v0.1.0` tag, `pynn/py.typed`, `pynn.__version__`, the
-exact ruff and mypy pins, and `.pre-commit-config.yaml`; D produced `pynn/viz.py`,
+exact ruff and mypy pins, and `.pre-commit-config.yaml`; C produced
+`examples/char_rnn.ipynb` and `scripts/download_shakespeare.py`, executed and committed
+with its outputs, and needed no library code to do it; D produced `pynn/viz.py`,
 `Tensor.to_dot`, and the tape figure the README now opens with. The remaining letters are
 left as they were rather than shifted up, so a prompt already in flight still means what
 it said.
+
+Item 4 of `TASKS.md` is no longer the item prompt C was written against. C turned up a
+measured resource problem on its way through — a finished graph is a reference cycle —
+and that finding took the slot the example domain vacated. **Prompt E is the new item 4**,
+and it is the only prompt here that came out of another prompt's work rather than out of
+a review pass.
 
 ---
 
@@ -42,7 +51,7 @@ Every prompt below already includes this. It is repeated here so it can be edite
 > **State of the repo.** Green on Python 3.10–3.14: 807 tests, 341 checks from
 > `python -m pynn.verify` (209 of them numerical gradient checks), 98.4% line coverage
 > with a 95% floor enforced in CI. `ruff` and `mypy` are clean across `pynn tests
-> examples scripts benchmarks`, including the code cells of `examples/mnist.ipynb`.
+> examples scripts benchmarks`, including the code cells of both notebooks.
 > `pre-commit run --all-files` is clean too, and `ruff` and `mypy` are pinned exactly —
 > if you bump one, bump `.pre-commit-config.yaml` in the same commit.
 >
@@ -160,72 +169,87 @@ Constraints:
 
 ---
 
-## Prompt C — A second example domain
+## Prompt E — Reclaim the tape
 
-**TASKS.md item 4.** One notebook, but it is the most visible artifact in the repo after
-the README.
+**TASKS.md item 4.** The smallest package here and the only one that is already costing
+something: the workaround is in the repository, in `examples/char_rnn.ipynb`'s training
+loop. The patch is a few lines; choosing which patch is the work.
 
 ```text
 [paste the shared preamble here]
 
-Your job is TASKS.md item 4: a second example domain, showing the library generalizes
-past image classification.
+Your job is TASKS.md item 4: reclaim the tape without waiting for the cyclic collector.
+Read that entry first. It carries measurements taken over 400 steps with a fresh process
+per row — do not re-derive them, and do not replace them with a shorter run.
 
-Build examples/char_rnn.ipynb — a character-level language model on a small public-domain
-text. Everything it needs already exists: Embedding, LSTMCell, differentiable slicing,
-SparseCategoricalCrossentropy, AdamW, clip_grad_norm, and the LR schedules.
+The problem. Every Tensor holds its reverse pass as a closure that references the Tensor
+it belongs to, so a finished graph is a reference cycle. Dropping the last name pointing
+at the loss frees nothing; only CPython's cyclic collector can, and it decides when to run
+a full collection from how much the object count has grown, which bears no relation to the
+hundreds of megabytes of NumPy arrays hanging off those objects. A feedforward model never
+notices — its graph is a few dozen nodes. Anything that unrolls a recurrence does:
+examples/char_rnn.ipynb calls gc.collect() on a cadence inside its training loop for this
+reason, and an earlier draft of it, at batch 64, was killed by the OS at 7 GB.
 
-Study examples/mnist.ipynb first and match it: it is committed WITH its outputs so it
-renders on GitHub, its code cells are held to the same ruff rules as the library, and it
-explains what is happening rather than only showing it.
+The decision is the work. TASKS.md item 4 lists three options in increasing order of
+commitment: document it (where it stands today), a Tensor.free_graph() the caller invokes
+after backward, or backward(retain_graph=False) as the default, which is how PyTorch
+spells the same trade. Pick one and defend it in the commit body. free_graph() is the
+recommendation: it changes no default behaviour, so nothing that works today stops
+working, and it is the option that can still become a default later — the reverse is not
+true. Whichever you pick, breaking the cycle means clearing a node's `reverse` and
+`children` as the traversal passes it, over the topological order backward already walks.
 
-What the notebook should cover:
-- A small corpus, downloaded by a script in scripts/ the way scripts/download_mnist.py
-  works, or embedded if it is small enough to commit. Public domain only — Tiny
-  Shakespeare is the conventional choice. Do not commit anything large; examples/data/ is
-  gitignored.
-- Character vocabulary and windowed batching. get_batches shuffles by default, which is
-  what you want here.
-- Embedding -> LSTMCell unrolled over the window -> Linear head, trained with AdamW.
-  Use clip_grad_norm — recurrent models are exactly the case it exists for, and the
-  notebook should say why and show the clipped norm over training.
-- Training curves, and *sampled text at several checkpoints* so a reader can see it go
-  from noise to something word-shaped. That progression is the whole point of the demo.
-- A temperature-controlled sampling function, with a short explanation of what
-  temperature does to the softmax.
-- Honest framing: this is a small model on a small corpus and the output will be
-  imperfect. Say so. Do not oversell it.
+What has to come with it:
+- An invariant in pynn/verify/invariants.py: after whichever call frees the graph, the
+  loss's children are empty and a second backward raises rather than silently computing
+  something wrong. That is the house rule about failing loudly, and it matters more here
+  than usual: a freed graph that quietly returns zeros looks like a converged model.
+- A test that the freed path produces the same gradients as the unfreed one on a graph
+  with a reused input. Freeing mid-traversal must not free a node that another node still
+  needs, and the single-consumer case cannot see that.
+- Before-and-after peak RSS for the notebook's configuration, measured the way TASKS.md
+  item 4 was measured.
+- examples/char_rnn.ipynb updated to use it. If the fix removes the need for the cadence,
+  the gc.collect() and the paragraph explaining it both go, and the notebook is
+  re-executed so its committed outputs match its committed source — budget ~4 minutes
+  for that, and expect the wall-clock figure in its Summary table to move. If the cadence
+  still helps on top of the fix, say by how much rather than leaving both in silently.
+- USAGE.md section 5 documents the workaround today, with numbers. It has to say whatever
+  is true afterwards.
 
-Then re-execute the notebook so the committed outputs match the committed source, lint it
-(`.venv/bin/ruff format examples/char_rnn.ipynb && .venv/bin/ruff check
-examples/char_rnn.ipynb`), and link it from README.md next to the MNIST notebook.
-
-If you use matplotlib, read the dataviz guidance the repo already follows in
-examples/mnist.ipynb: a validated two-colour categorical palette for train/test series,
-a single-hue sequential ramp for magnitude, a diverging ramp with a neutral midpoint for
-signed values, never a dual y-axis.
-
-Budget: keep total training under ~5 minutes on a laptop CPU. It is a demonstration, not
-a result. Report the wall-clock time in the notebook.
+Traps, every one of them met while measuring this:
+- Measure over at least 400 steps. The same benchmark over 60 steps reports the opposite
+  conclusion — 82.3 ms/step uncollected against 88.0 with gc.collect() every 4, i.e.
+  that collecting costs 7% and should be deleted. The effect only appears once enough
+  garbage has accumulated to make allocation expensive.
+- Fresh process per configuration, and read RSS from `ps -o rss= -p <pid>`.
+  resource.getrusage(...).ru_maxrss reported near-identical peaks for configurations whose
+  true peaks differed by more than 2 GB.
+- Nothing in tests/ or pynn/verify depends on re-running a graph. That was checked rather
+  than assumed, and item 4 names the one test that calls backward() twice and why it does
+  not count. Re-check it rather than trusting a note, but do not expect it to block you.
 
 Constraints:
-- Do not add library code unless the notebook genuinely cannot be written without it. If
-  it can't, that is a finding worth reporting — say what was missing.
-- The notebook must not require the numba extra.
+- Tensor.backward is an explicit-stack traversal so that a deeply unrolled graph does not
+  hit the recursion limit. Do not turn it back into recursion while restructuring it.
+- No gradient changes. python -m pynn.verify must pass unchanged, all 209 gradient cases
+  included — this is a memory fix, and a memory fix that moves a number is a bug.
 ```
 
 ---
 
 ## Running these in parallel
 
-The two remaining packages touch mostly disjoint files, but two overlaps are worth
-knowing:
+The two remaining packages barely overlap, but the places they do are worth knowing:
 
-- **B and C both touch `README.md`, `USAGE.md`, and `TASKS.md`.** Expect conflicts there;
-  they are prose, so they resolve by hand easily.
-- **B's item 3 touches every optimizer**; nothing else does.
+- **B and E both touch `TASKS.md`** and `CHANGELOG.md`. Prose, so they resolve by hand.
+- **B's item 3 touches every optimizer**; E touches `pynn/core/tensor.py`,
+  `pynn/verify/invariants.py`, `examples/char_rnn.ipynb`, and `USAGE.md`. Nothing is
+  shared.
 - `READ_FILES.md` is generated, so never merge it — regenerate after merging with
   `.venv/bin/python scripts/generate_read_files.py`.
 
-Suggested order if running sequentially: **C** (the big visible artifact), then **B**
-(the largest, and the one most likely to want its own review).
+Suggested order if running sequentially: **E** first. It is much the smaller package, it
+is the one item in `TASKS.md` already costing something, and B's item 3 re-profiles a
+training step — better done after the tape's memory behaviour has settled than before.
