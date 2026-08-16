@@ -118,23 +118,33 @@ what it should.
 
 Three ways to close it:
 
-- **Zero the non-leaf gradients at the top of `backward`** — `for t in order: if
-  t.children: t.grad = zeros`. Makes a second pass correct and matches PyTorch's
-  semantics. Costs one allocation per node per backward, on the hottest path in the
-  library, to support an operation nobody should be performing. Measure it before
-  committing: the char-RNN graph is 1,234 nodes.
+- **Zero the non-leaf gradients a previous pass filled.** Not every non-leaf, every
+  pass: a fresh graph's intermediates are already zero from `Tensor.__init__`, so the
+  only ones needing it are the ones a previous `backward` wrote to. Mark each node as
+  the reverse pass runs it, and zero only marked nodes on the way in. The first pass
+  costs one flag check per node — the same shape as the freed-graph scan `backward`
+  already does, measured at 0.03 ms on a 1,234-node graph — and the memset only
+  happens on the second pass, which is the one that is currently wrong. This is much
+  cheaper than "an allocation per node per backward" makes it sound, and it keeps
+  every intermediate's gradient readable afterwards.
 - **Store gradients on leaves only**, as PyTorch does, and pass intermediates
   transiently. Correct by construction, and a rewrite of every reverse closure in the
-  library — `x.grad += ...` is the idiom `docs/DESIGN.md` §2 is built around. It would
-  also cost the property that any tensor's gradient is readable without a
-  `retain_grad()` dance, which is worth real money in a library meant to be read.
+  library — `x.grad += ...` is the idiom `docs/DESIGN.md` §2 is built around. It also
+  deletes a real capability rather than merely costing effort: `∂L/∂h_t` at every
+  timestep is how you find where an unrolled recurrence stops propagating credit,
+  `∂y_c/∂A` at a feature map is Grad-CAM, and reading the gradient either side of a
+  fused reverse is how you check one by hand. PyTorch needs `retain_grad()` or a hook
+  for all three; here they are `h.grad`. **Not recommended.**
 - **Make freeing the default** — `backward(retain_graph=False)`, so the wrong answer
   becomes unreachable rather than merely documented. Cheapest, and the direction
-  `free_graph` was already pointing; the objection to it is weaker now than it was,
-  since nobody can be relying on a result that has never been right.
+  `free_graph` was already pointing; the objection to it is weaker than it looks, since
+  nobody can be relying on a result that has never been right.
 
-The third is the recommendation, with the first as a fallback if a real use for
-re-running a graph ever turns up.
+The first and third are **complements, not alternatives**, and together they are what
+PyTorch does: a retained graph gives correct answers, and you have to ask for one. Take
+them in that order. The first is nearly free and makes retention correct, which is what
+makes the second safe to ship — flipping the default while `retain_graph=True` still
+returns a compounded gradient would just move the wrong number behind a flag.
 
 ### 5. A float32 path
 
