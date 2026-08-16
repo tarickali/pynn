@@ -32,7 +32,11 @@ While the major version is 0, the public API may change between minor versions.
   point — every other schedule here is a pure function of the epoch, which is what
   makes them resumable from `last_epoch` alone, while this one reads a metric and takes
   it as an argument to `step`. It accepts a scalar `Tensor`, since the value being
-  watched is usually a loss that just came off the tape.
+  watched is usually a loss that just came off the tape. Its relative threshold is a
+  fraction of `abs(best)` rather than of `best`, which is one deliberate divergence
+  from PyTorch: written PyTorch's way, a *negative* metric improves by getting worse —
+  with a best of -5.0 the bar lands at -4.9995 — so the counter resets forever and the
+  schedule never fires.
 - **`KLDivLoss` and `HingeLoss`**, both through the shared `_reduce` helper so the three
   reduction modes cannot drift apart. KL divergence differs from cross-entropy only by
   the target's own entropy, so the two have *identical gradients* — the value is what
