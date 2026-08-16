@@ -4,10 +4,11 @@ Independent work packages covering items 1-3 of [`TASKS.md`](../TASKS.md). Each 
 self-contained and touches a mostly disjoint set of files, so they can run in any order —
 or in parallel, if each agent works on its own branch and rebases before merging.
 
-Item 4 and items 5-7, the sequence-modelling chain, are deliberately not covered
-here: item 4 is a decision rather than a package, and the chain is a dependency
-chain rather than independent packages — future work rather than queued work. They
-would want their own prompts, written when they are actually scheduled.
+Items 4 and 5, and items 6-8, the sequence-modelling chain, are deliberately not
+covered here: 4 is a decision rather than a package, 5 postdates the prompts, and
+the chain is a dependency chain rather than independent packages — future work
+rather than queued work. They would want their own prompts, written when they are
+actually scheduled.
 
 Copy one prompt verbatim into a fresh agent session.
 

@@ -5,7 +5,7 @@ Work that is queued but not scheduled. The library is green on Python 3.10–3.1
 
 Everything structural is done — the last item of that kind, differentiable indexing, is
 what unblocked the recurrent cells — and so is everything in the packaging and process
-section that used to lead this file. Items 1-4 are independent and can be picked up in
+section that used to lead this file. Items 1-5 are independent and can be picked up in
 any order or dropped; the sequence-modelling section at the end is a dependency chain,
 and is future work rather than queued work.
 
@@ -136,6 +136,45 @@ Three ways to close it:
 The third is the recommendation, with the first as a fallback if a real use for
 re-running a graph ever turns up.
 
+### 5. A float32 path
+
+**The tape already preserves it.** A float32 array stays float32 through a forward and
+backward pass, gradients included — there is an invariant and a test for that. What is
+missing is a way to get a whole *model* into float32, and it is two specific things
+rather than anything deep:
+
+```
+he_normal((4, 3)).dtype    ->  float64      every initializer
+Tensor(2.0).dtype          ->  float64      every Python scalar an operator meets
+```
+
+1. The eleven initializers in `pynn/functional/initializers.py` call `np.zeros`,
+   `Generator.normal` and friends without a dtype, so they return float64 and a layer's
+   weights are float64 from the moment it builds. The first matmul promotes every
+   activation downstream of it.
+2. `convert_tensor_input` wraps a Python scalar in a float64 *array*, so `x * 2.0`
+   promotes a float32 tensor. NumPy would not: under NEP 50 a Python scalar is weak and
+   `float32_array * 2.0` stays float32. The promotion is this library's, not NumPy's.
+
+Both are mechanical. A `dtype` threaded through the initializers, `initializer_factory`,
+and each layer's `build`; or one module-level default in the shape of
+`pynn.core.random`'s generator, which is how PyTorch spells it (`set_default_dtype`).
+Then either weak-scalar handling in `convert_tensor_input` or inheriting the other
+operand's dtype.
+
+Worth it for the memory: every intermediate on the tape carries a data array and a
+gradient array of the same size, so a float32 graph is half of a float64 one — directly
+against the 860 MB in item 4. The speed is a maybe rather than a promise: `sgemm` has
+twice `dgemm`'s SIMD lanes, but whether that reaches a model dominated by Python
+dispatch is a measurement, not an inference. Measure before quoting anything.
+
+**`pynn.verify` must stay float64.** Central differences at `eps = 1e-6` subtract two
+nearly equal numbers, and float32 carries about 7 decimal digits — the cancellation
+would eat most of them and the checker would report failures that are its own
+arithmetic rather than the library's. The sweep stays double precision, and a float32
+path is verified another way: dtype propagation through every layer, and agreement with
+the float64 result to a tolerance float32 can actually meet.
+
 ---
 
 ## Sequence modelling
@@ -150,7 +189,7 @@ and gradients flow through a full scaled-dot-product attention built from them. 
 mask is `masked_fill(scores, future, -1e9)` ahead of the softmax, and the filled
 positions come back with exactly zero gradient.
 
-### 5. Fused recurrent layers
+### 6. Fused recurrent layers
 
 `RNNCell`, `LSTMCell`, and a `GRUCell` are the primitives; these are the layers that own
 the loop, so a caller who does not need a custom one does not have to write it.
@@ -193,7 +232,7 @@ the loop, so a caller who does not need a custom one does not have to write it.
   `RNNCell` / `LSTMCell` cases, plus one bidirectional case. An invariant asserting that
   a bidirectional layer's two directions see the sequence in opposite orders.
 
-### 6. Attention
+### 7. Attention
 
 - **`scaled_dot_product_attention(q, k, v, mask=None)`** in `pynn/functional/`:
   `softmax(q @ k.T / sqrt(d)) @ v`. Verified expressible today; the work is the API, the
@@ -209,7 +248,7 @@ the loop, so a caller who does not need a custom one does not have to write it.
   all three of Q, K, and V — self-attention is the case where one input has three
   consumers, which is exactly the shape a reverse pass that overwrites gets wrong.
 
-### 7. Transformer
+### 8. Transformer
 
 - **`TransformerEncoderLayer`**: multi-head self-attention, residual, `LayerNorm`,
   position-wise feed-forward (two `Linear` layers with `GELU` between them), residual,
@@ -235,7 +274,7 @@ because "the autodiff engine is general enough that a transformer is a compositi
 what is already in it, not a rewrite" is a claim worth being able to demonstrate rather
 than assert.
 
-If only part of it is ever built, **item 6 is the one to build**: attention is the
+If only part of it is ever built, **item 7 is the one to build**: attention is the
 single most-asked-about architecture, and it is roughly a hundred lines on top of what
 is already here.
 
