@@ -3,14 +3,19 @@ from typing import Any
 import numpy as np
 
 from pynn.core import Optimizer
-from pynn.core.optimizer import ParameterSource
+from pynn.core.optimizer import ParameterSource, effective_gradient, state_buffer
 from pynn.utils.tensor import get_data_and_grad
 
 __all__ = ["Adam"]
 
 
 class Adam(Optimizer):
-    """Adam optimizer."""
+    """Adam optimizer.
+
+    Written in place — see `pynn.core.optimizer` for what that costs and why. Sixteen
+    full-size allocations per parameter per step became three: the scratch array the
+    two moment updates share, and the two bias-corrected moments.
+    """
 
     def __init__(
         self,
@@ -42,29 +47,37 @@ class Adam(Optimizer):
         for params, cache in zip(self.trainable_parameters(), self.cache, strict=True):
             for key, param in params.items():
                 data, grad = get_data_and_grad(param)
-                g = -grad if self.maximize else grad
-                g = g + self.weight_decay * data
-                if key not in cache["momentum"]:
-                    cache["momentum"][key] = np.zeros_like(g)
-                    cache["velocity"][key] = np.zeros_like(g)
-                    cache["vhat_max"][key] = np.zeros_like(g)
+                g = effective_gradient(grad, data, self.weight_decay, self.maximize)
+                momentum = state_buffer(cache["momentum"], key, g)
+                velocity = state_buffer(cache["velocity"], key, g)
 
-                cache["momentum"][key] = (
-                    self.beta_1 * cache["momentum"][key] + (1 - self.beta_1) * g
-                )
-                cache["velocity"][key] = self.beta_2 * cache["velocity"][key] + (
-                    1 - self.beta_2
-                ) * (g**2)
+                # momentum = beta_1 * momentum + (1 - beta_1) * g
+                scratch = (1 - self.beta_1) * g
+                momentum *= self.beta_1
+                momentum += scratch
 
-                mhat = cache["momentum"][key] / (1 - self.beta_1**t)
-                vhat = cache["velocity"][key] / (1 - self.beta_2**t)
+                # velocity = beta_2 * velocity + (1 - beta_2) * g**2, reusing the array
+                # the moment update above already allocated.
+                np.square(g, out=scratch)
+                scratch *= 1 - self.beta_2
+                velocity *= self.beta_2
+                velocity += scratch
+
+                mhat = momentum / (1 - self.beta_1**t)
+                vhat = velocity / (1 - self.beta_2**t)
                 if self.amsgrad:
-                    cache["vhat_max"][key] = np.maximum(cache["vhat_max"][key], vhat)
-                    vhat = cache["vhat_max"][key]
+                    vhat_max = state_buffer(cache["vhat_max"], key, g)
+                    np.maximum(vhat_max, vhat, out=vhat)
+                    np.copyto(vhat_max, vhat)
 
-                param.data = param.data - self.learning_rate * mhat / (
-                    np.sqrt(vhat) + self.eps
-                )
+                # mhat and vhat are this step's own arrays, so the rest of the update
+                # runs through them: sqrt(vhat) + eps, then learning_rate * mhat over
+                # it, and only then does anything touch the parameter.
+                np.sqrt(vhat, out=vhat)
+                vhat += self.eps
+                mhat *= self.learning_rate
+                mhat /= vhat
+                data -= mhat
         self.increment()
 
     def reset(self) -> None:

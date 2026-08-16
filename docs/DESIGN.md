@@ -696,6 +696,47 @@ removes interpreter overhead. Where there is no interpreter overhead to remove �
 wrapper over a C kernel — it can only add cost. Profile first, then compile the thing the
 profile names.
 
+### The thing the profile named next, and why it needed no JIT
+
+Profiling an MLP step rather than a CNN one put **32% of it in `SGD.update`** — and none
+of that was a Python loop. It was allocation. Every line of every update rule built a
+fresh full-size array, seven of them per parameter per step for momentum SGD and sixteen
+for Adam, and two of the seven were computing `grad + 0.0 * data`.
+
+Rewriting the six rules to mutate their buffers in place (`velocity *= momentum`,
+`velocity += g`, `data -= lr * velocity`) leaves the arithmetic bit-for-bit identical and
+takes momentum SGD to one allocation and Adam to three. The reference transcriptions in
+`check_invariants` passed unchanged, which is what they are for; the equality was also
+checked directly against the pre-rewrite implementations across 80 flag combinations,
+`array_equal` rather than `allclose`.
+
+The interesting number is not the speedup, it is the gap between two ways of measuring
+it. In isolation — construct an optimizer, call `update()` in a loop — momentum SGD is
+**3.0x** faster. Inside a real training loop it is **1.6x**. Both are honest; they
+measure different things. Isolated, the parameter, gradient and velocity arrays stay in
+cache between calls, so the allocations are most of what is left to see. In a real step
+the forward and backward passes have just walked ten megabytes of tape, every one of
+those arrays is cold, and a share of `update`'s cost is memory traffic that neither
+version can avoid.
+
+That gap is the reason the `njit` kernel measured at 4.6–7.2x for the same code was not
+worth building. Apply the same discount and it is nearer 3x in a loop — but the ceiling
+settles it either way: with the optimizer now at ~15% of a step, a kernel that took *no*
+time at all could save 13%, in exchange for a second implementation of six optimizers
+with four flag variants each. `col2im` earned its duplication at 42% of a CNN step. This
+does not.
+
+**Two things this made behavioural rather than incidental.** `param.data` is now written
+through rather than rebound, so a caller holding the array — `Tensor.numpy()` returns
+it — sees training happen, as it would in PyTorch; `state_dict()` and `detach()` copy, so
+a checkpoint is still a snapshot. And `effective_gradient`, which applies `maximize` and
+coupled weight decay, returns a **read-only** array, because when neither applies it is a
+view of `param.grad` rather than a copy. An update rule that wrote through it would
+corrupt the gradient the caller still owns, so NumPy raises instead. Both are checked in
+`check_invariants` across every flag combination, since neither is visible in a
+trajectory: a rule that consumed `param.grad` takes a correct first step and a wrong
+second one.
+
 ## 16. What was left out, and why
 
 **Attention, and anything that needs a full sequence layer.** `RNNCell` and `LSTMCell`

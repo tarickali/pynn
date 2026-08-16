@@ -1,14 +1,19 @@
 import numpy as np
 
 from pynn.core import Optimizer
-from pynn.core.optimizer import ParameterSource
+from pynn.core.optimizer import ParameterSource, effective_gradient
 from pynn.utils.tensor import get_data_and_grad
 
 __all__ = ["SGD"]
 
 
 class SGD(Optimizer):
-    """Stochastic gradient descent with optional momentum and weight decay."""
+    """Stochastic gradient descent with optional momentum and weight decay.
+
+    Written in place — see `pynn.core.optimizer` for what that costs and why. The
+    momentum path used to allocate seven full-size arrays per parameter per step and
+    now allocates one, the `learning_rate * g` the final subtraction consumes.
+    """
 
     def __init__(
         self,
@@ -36,21 +41,28 @@ class SGD(Optimizer):
         for params, cache in zip(self.trainable_parameters(), self.cache, strict=True):
             for key, param in params.items():
                 data, grad = get_data_and_grad(param)
-                g = -grad if self.maximize else grad
-                g = g + self.weight_decay * data
+                g = effective_gradient(grad, data, self.weight_decay, self.maximize)
 
                 if self.momentum != 0.0:
                     velocity = cache["velocity"].get(key)
                     if velocity is None:
                         # First step for this parameter: the buffer is seeded with the
                         # gradient itself rather than being damped, matching PyTorch.
+                        # A copy, not an alias: `g` may be a view of `param.grad`.
                         velocity = np.copy(g)
+                        cache["velocity"][key] = velocity
                     else:
-                        velocity = self.momentum * velocity + (1 - self.dampening) * g
-                    cache["velocity"][key] = velocity
+                        # velocity = momentum * velocity + (1 - dampening) * g.
+                        # The undamped branch is the default and skips a full-size
+                        # multiply by 1.0, which is exact and therefore free to drop.
+                        velocity *= self.momentum
+                        if self.dampening == 0.0:
+                            velocity += g
+                        else:
+                            velocity += (1 - self.dampening) * g
                     g = g + self.momentum * velocity if self.nesterov else velocity
 
-                param.data = param.data - self.learning_rate * g
+                data -= self.learning_rate * g
         self.increment()
 
     def reset(self) -> None:

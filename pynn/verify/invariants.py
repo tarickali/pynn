@@ -381,6 +381,25 @@ def _trajectory(optimizer_cls, steps: int = 6, gradient: float = 0.7, **kwargs):
     return values
 
 
+def _describe(flags: dict[str, float | bool]) -> str:
+    """`{"momentum": 0.9}` as `momentum=0.9`, for a check's name."""
+    return ", ".join(f"{name}={value}" for name, value in flags.items()) or "defaults"
+
+
+#: One entry per optimizer, listing the flag combinations whose update paths differ.
+#: AdamW is here as well as in its own section above: its scratch reuse is the most
+#: involved of the six, since the decoupled decay lands between the moment updates and
+#: the step.
+_IN_PLACE_CASES: list[tuple[type, list[dict[str, float | bool]]]] = [
+    (SGD, [{}, {"momentum": 0.9}, {"momentum": 0.9, "nesterov": True}]),
+    (Adam, [{}, {"amsgrad": True}, {"weight_decay": 0.1}]),
+    (AdamW, [{}, {"weight_decay": 0.0}, {"amsgrad": True}]),
+    (RMSprop, [{}, {"centered": True}, {"momentum": 0.9}]),
+    (Adagrad, [{}, {"initial_accumulator_value": 0.5}]),
+    (Adadelta, [{}, {"rho": 0.5}]),
+]
+
+
 def check_optimizers() -> CheckReport:
     """Verify each optimizer against a closed-form reference implementation."""
 
@@ -514,6 +533,36 @@ def check_optimizers() -> CheckReport:
             _trajectory(AdamW, learning_rate=lr, weight_decay=decay),
         ),
     )
+
+    # --- what running the update rules in place must not cost ------------- #
+    #
+    # Two properties that no trajectory check can see. An update rule that quietly
+    # consumed `param.grad` takes a correct first step and a wrong second one, and one
+    # that rebinds `param.data` rather than writing through it leaves every caller
+    # holding that array — `Tensor.numpy()` returns it — looking at stale weights. The
+    # flag combinations matter here rather than for the arithmetic: the branches that
+    # reuse a scratch array are exactly where an aliasing mistake would live.
+    for optimizer_cls, flags in _IN_PLACE_CASES:
+        name = optimizer_cls.__name__
+        for extra in flags:
+            param = Tensor(np.array([1.0, -2.0, 0.5]))
+            initial = param.data.copy()
+            optimizer = optimizer_cls([{"w": param}], learning_rate=0.01, **extra)
+            held = param.data
+
+            untouched = True
+            for _ in range(3):
+                param.grad = np.array([0.7, -0.3, 0.1])
+                gradient, before = param.grad, param.grad.copy()
+                optimizer.update()
+                untouched = untouched and bool(np.array_equal(gradient, before))
+
+            label = f"{name}({_describe(extra)})"
+            report.add(f"{label} leaves param.grad alone", untouched)
+            report.add(
+                f"{label} steps param.data in place",
+                held is param.data and not bool(np.array_equal(held, initial)),
+            )
 
     # --- flags and shared behavior ---------------------------------------- #
     for optimizer_cls in ALL_OPTIMIZERS:

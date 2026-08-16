@@ -74,6 +74,32 @@ While the major version is 0, the public API may change between minor versions.
 
 ### Changed
 
+- **Every optimizer's `update` runs in place.** Profiling an MLP training step put 32%
+  of it in `SGD.update`, and none of that was a Python loop — it was allocation. Each
+  line of each update rule built a fresh full-size array: seven per parameter per step
+  for momentum SGD, sixteen for Adam, two of the seven spent computing
+  `grad + 0.0 * data`. The rules now mutate their buffers with `*=` / `+=` / `out=` and
+  apply the step as `data -= ...`, which takes momentum SGD to one allocation and Adam
+  to three. **The arithmetic is bit-for-bit identical** — the closed-form reference
+  transcriptions passed unchanged, and the equality was checked directly against the
+  pre-rewrite implementations across 80 flag combinations with `array_equal` rather than
+  `allclose`. Momentum SGD's `update` is 3.0x faster measured in isolation and 1.6x
+  inside a real training loop, where the forward and backward passes have evicted the
+  arrays it touches; it is now ~15% of an MLP step rather than ~32%, and the step itself
+  is about 8% faster, inside the benchmark table's stated run-to-run variation. That gap
+  between the isolated and in-loop numbers is why the compiled `njit` kernel `TASKS.md`
+  measured at 4.6–7.2x was not built: the ceiling on it is now 13% of a step, in
+  exchange for a second implementation of six optimizers with four flag variants each.
+- **`param.data` is written through rather than rebound.** A consequence of the above,
+  and a deliberate one: a caller holding the array — `Tensor.numpy()` returns it — now
+  sees training happen, as it would in PyTorch. `state_dict()` and `detach()` copy, so a
+  checkpoint is still a snapshot. The new `effective_gradient` helper, which applies
+  `maximize` and coupled weight decay, returns a **read-only** array for the same
+  reason: when neither applies it is a view of `param.grad` rather than a copy, and an
+  update rule that wrote through it would corrupt a gradient the caller still owns.
+  `check_invariants` pins both across every flag combination, since neither is visible
+  in a trajectory — a rule that consumed `param.grad` takes a correct first step and a
+  wrong second one.
 - **`Tensor.__setitem__` refuses a Tensor an operation produced.** In-place assignment
   was already documented as non-differentiable and not recorded, but the guard was a
   docstring. A reverse closure reads its inputs' `data` when it runs rather than when

@@ -83,27 +83,48 @@ the bar is "worth the duplication", not "faster in a microbenchmark".
 | Candidate | Isolated speedup | Share of a step | Verdict |
 | --- | --- | --- | --- |
 | `col2im` scatter | 2–13x | 42% of a CNN step | **done** |
-| Optimizer step | 4.6–7.2x | **32% of an MLP step** | in-place NumPy first |
+| Optimizer step | 4.6–7.2x compiled | was 32%, now ~15% of an MLP step | **in-place done, not compiling** |
 | `stable_sigmoid` | 3.3–3.7x | model-dependent | maybe |
 | `erf` | 7.1–7.5x | GELU exact path only | cheap, narrow |
 | `im2col`'s copy | none | 4.6% of a CNN step | no |
 
-**The optimizer step is the biggest remaining win, and the first move needs no
-dependency.** `SGD.update` is 32% of an MLP training step, and most of that is
-allocation: every line builds a fresh full-size array. Rewriting it with in-place NumPy
-gives **1.8–2.5x** for free — no dependency, no second implementation:
+**The optimizer step is done, in place, with no dependency**, and the measurement that
+came out of it is worth more than the speedup: *an isolated microbenchmark of an
+update rule roughly doubles the gain you actually get.*
 
-```python
-velocity *= momentum          # instead of velocity = momentum * velocity + g
-velocity += grad
-data -= lr * velocity
-```
+All six update rules now mutate their buffers with `*=` / `+=` / `out=` and apply the
+step as `data -= ...`, leaving the arithmetic bit-for-bit identical — checked directly,
+across 80 flag combinations, against the pre-rewrite implementations. Momentum SGD went
+from seven full-size allocations per parameter per step to one, and Adam from sixteen to
+three. Timed on the benchmark MLP's 269,322 parameters, old and new strictly alternated
+per sample so machine load lands on both:
 
-A fused `njit` kernel reaches 4.6–7.2x, so roughly half the available gain is free and
-the other half costs a dual implementation *per optimizer* — five of them, each with
-`maximize` / `nesterov` / `amsgrad` / `centered` variants. That is far more duplication
-than `col2im`'s single scatter. Do the in-place rewrite, re-profile, and only then decide
-whether the remainder is worth compiling.
+| | isolated `update()` | in a real training loop |
+| --- | --- | --- |
+| SGD | 0.54 → 0.22 ms (**2.5x**) | — |
+| SGD, momentum 0.9 | 1.13 → 0.37 ms (**3.0x**) | 0.57 → 0.35 ms (**1.6x**) |
+| Adam | 2.53 → 1.45 ms (1.7x) | — |
+| RMSprop / Adagrad / Adadelta | 1.4–1.8x | — |
+
+**The two right-hand columns are the finding.** Isolated, the buffers stay in cache
+between calls and the allocations are most of what is left to measure. In a real step
+the forward and backward passes evict them, so a share of `update`'s cost is cold reads
+that both versions pay and cannot be optimized away — 3.0x becomes 1.6x. The
+`col2im`-style microbenchmark is the wrong instrument for a function whose working set
+is the whole parameter vector.
+
+`SGD.update` is now **~15% of an MLP step**, down from ~32% (24% → 15% by wall clock at
+the 5th percentile; 30% → 15% under cProfile, which inflates Python-heavy frames). End
+to end the MLP step is ~1.08x and the LSTM ~1.08x; the CNN does not move, since its
+20,522 parameters are a thirteenth of the MLP's and its time is in `conv2d`.
+
+**Not compiling the remainder.** The 4.6–7.2x for a fused `njit` kernel was measured the
+isolated way, so apply the discount above and it lands nearer 2.5–3.8x in a loop. But
+the ceiling is the argument, not the ratio: an update rule that took *zero* time would
+save 0.35 ms of a 2.6 ms step, 13%, and that is the *most* a kernel can be worth. The
+price is a dual implementation per optimizer — six of them, each with `maximize` /
+`nesterov` / `amsgrad` / `centered` variants — against `col2im`'s single scatter. Revisit
+only if a profile of a much larger model puts it back near 30%.
 
 **`stable_sigmoid`** builds a boolean mask and two fancy-indexed temporaries. A fused
 kernel is 3.3–3.7x. It backs `sigmoid`, `softplus`, `silu`, and BCE-with-logits, so the

@@ -1,14 +1,17 @@
 import numpy as np
 
 from pynn.core import Optimizer
-from pynn.core.optimizer import ParameterSource
+from pynn.core.optimizer import ParameterSource, effective_gradient, state_buffer
 from pynn.utils.tensor import get_data_and_grad
 
 __all__ = ["Adadelta"]
 
 
 class Adadelta(Optimizer):
-    """Adadelta optimizer."""
+    """Adadelta optimizer.
+
+    Written in place — see `pynn.core.optimizer` for what that costs and why.
+    """
 
     def __init__(
         self,
@@ -34,24 +37,31 @@ class Adadelta(Optimizer):
         for params, cache in zip(self.trainable_parameters(), self.cache, strict=True):
             for key, param in params.items():
                 data, grad = get_data_and_grad(param)
-                g = -grad if self.maximize else grad
-                g = g + self.weight_decay * data
-                if key not in cache["average"]:
-                    cache["average"][key] = np.zeros_like(g)
-                    cache["accumulator"][key] = np.zeros_like(g)
+                g = effective_gradient(grad, data, self.weight_decay, self.maximize)
+                average = state_buffer(cache["average"], key, g)
+                accumulator = state_buffer(cache["accumulator"], key, g)
 
-                cache["average"][key] = self.rho * cache["average"][key] + (
-                    1 - self.rho
-                ) * (g**2)
-                delta = (
-                    (cache["accumulator"][key] + self.eps)
-                    / (cache["average"][key] + self.eps)
-                ) ** 0.5 * g
-                cache["accumulator"][key] = self.rho * cache["accumulator"][key] + (
-                    1 - self.rho
-                ) * (delta**2)
+                # average = rho * average + (1 - rho) * g**2
+                scratch = np.square(g)
+                scratch *= 1 - self.rho
+                average *= self.rho
+                average += scratch
 
-                param.data = param.data - self.learning_rate * delta
+                # delta = sqrt((accumulator + eps) / (average + eps)) * g
+                np.add(average, self.eps, out=scratch)
+                delta = accumulator + self.eps
+                delta /= scratch
+                delta **= 0.5
+                delta *= g
+
+                # accumulator = rho * accumulator + (1 - rho) * delta**2
+                np.square(delta, out=scratch)
+                scratch *= 1 - self.rho
+                accumulator *= self.rho
+                accumulator += scratch
+
+                delta *= self.learning_rate
+                data -= delta
         self.increment()
 
     def reset(self) -> None:

@@ -12,6 +12,7 @@ import numpy as np
 import pytest
 
 from pynn.core import Tensor
+from pynn.core.optimizer import effective_gradient
 from pynn.nn import Linear, Sequential
 from pynn.nn.losses import MeanSquaredError
 from pynn.optim import (
@@ -239,6 +240,126 @@ def test_adadelta():
 # --------------------------------------------------------------------------- #
 
 ALL_OPTIMIZERS = [SGD, Adam, RMSprop, Adagrad, Adadelta]
+
+# Every flag combination that takes a different path through an update rule. The
+# arithmetic is covered by the closed-form references above; these exist because the
+# update rules run in place, and the branches that reuse a scratch array are where an
+# aliasing mistake would live.
+IN_PLACE_FLAGS = [
+    (SGD, {}),
+    (SGD, {"momentum": 0.9}),
+    (SGD, {"momentum": 0.9, "dampening": 0.4}),
+    (SGD, {"momentum": 0.9, "nesterov": True}),
+    (SGD, {"weight_decay": 0.1}),
+    (SGD, {"maximize": True}),
+    (Adam, {}),
+    (Adam, {"amsgrad": True}),
+    (Adam, {"weight_decay": 0.1}),
+    (AdamW, {}),
+    (AdamW, {"weight_decay": 0.0}),
+    (AdamW, {"amsgrad": True}),
+    (RMSprop, {}),
+    (RMSprop, {"centered": True}),
+    (RMSprop, {"momentum": 0.9}),
+    (RMSprop, {"centered": True, "momentum": 0.9}),
+    (Adagrad, {}),
+    (Adagrad, {"initial_accumulator_value": 0.5}),
+    (Adagrad, {"learning_rate_decay": 0.1}),
+    (Adadelta, {}),
+    (Adadelta, {"rho": 0.5}),
+]
+IN_PLACE_IDS = [
+    f"{cls.__name__}-{'-'.join(f'{k}={v}' for k, v in flags.items()) or 'defaults'}"
+    for cls, flags in IN_PLACE_FLAGS
+]
+
+
+@pytest.mark.parametrize("optimizer_cls,flags", IN_PLACE_FLAGS, ids=IN_PLACE_IDS)
+def test_update_leaves_the_gradient_alone(optimizer_cls, flags):
+    """A rule that consumed `param.grad` takes a right first step and a wrong second.
+
+    Nothing else notices: `zero_grad()` overwrites the damage before the next backward
+    pass, so the only visible symptom is a trajectory that is slightly off from the
+    second step onward — which is what the reference tests would show, if the constant
+    gradient they use were not restored by hand between steps.
+    """
+    param = Tensor(np.array([1.0, -2.0, 0.5]))
+    optimizer = optimizer_cls([{"w": param}], learning_rate=0.01, **flags)
+
+    for _ in range(3):
+        param.grad = np.array([0.7, -0.3, 0.1])
+        gradient, before = param.grad, param.grad.copy()
+        optimizer.update()
+
+        assert np.array_equal(gradient, before), "the update modified param.grad"
+
+
+@pytest.mark.parametrize("optimizer_cls,flags", IN_PLACE_FLAGS, ids=IN_PLACE_IDS)
+def test_update_writes_through_param_data(optimizer_cls, flags):
+    """The step is applied to the array, not to the attribute holding it.
+
+    This is a deliberate behavior, not an implementation detail: `Tensor.numpy()`
+    hands the array out, and a caller holding it should see training happen, the way
+    it would in PyTorch. `state_dict()` and `detach()` copy, so a checkpoint is still
+    a snapshot.
+    """
+    param = Tensor(np.array([1.0, -2.0, 0.5]))
+    optimizer = optimizer_cls([{"w": param}], learning_rate=0.01, **flags)
+    held = param.numpy()
+    initial = held.copy()
+
+    param.grad = np.array([0.7, -0.3, 0.1])
+    optimizer.update()
+
+    assert held is param.data
+    assert not np.array_equal(held, initial)
+
+
+def test_effective_gradient_aliases_the_gradient_when_there_is_nothing_to_do():
+    """The common case, and the whole reason it is a function rather than two lines."""
+    grad = np.array([1.0, 2.0])
+    data = np.array([3.0, 4.0])
+
+    g = effective_gradient(grad, data, weight_decay=0.0, maximize=False)
+
+    assert np.shares_memory(g, grad)
+    assert g.tolist() == [1.0, 2.0]
+
+
+@pytest.mark.parametrize(
+    "weight_decay,maximize,expected",
+    [
+        (0.0, False, [1.0, 2.0]),
+        (0.0, True, [-1.0, -2.0]),
+        (0.5, False, [2.5, 4.0]),
+        (0.5, True, [0.5, 0.0]),
+    ],
+)
+def test_effective_gradient_applies_both_adjustments(weight_decay, maximize, expected):
+    grad = np.array([1.0, 2.0])
+    data = np.array([3.0, 4.0])
+
+    g = effective_gradient(grad, data, weight_decay, maximize)
+
+    assert g.tolist() == expected
+    assert grad.tolist() == [1.0, 2.0], "the caller's gradient was modified"
+
+
+@pytest.mark.parametrize(
+    "weight_decay,maximize", [(0.0, False), (0.0, True), (0.5, False), (0.5, True)]
+)
+def test_effective_gradient_refuses_to_be_written_through(weight_decay, maximize):
+    """It aliases `param.grad` in the common case, so writing to it has to raise.
+
+    Read-only in *every* case rather than only the aliasing one, or the guard would
+    hold for the default flags and quietly lapse under `maximize=True`.
+    """
+    g = effective_gradient(
+        np.array([1.0, 2.0]), np.array([3.0, 4.0]), weight_decay, maximize
+    )
+
+    with pytest.raises(ValueError, match="read-only"):
+        g *= 2.0
 
 
 @pytest.mark.parametrize("optimizer_cls", ALL_OPTIMIZERS, ids=lambda c: c.__name__)

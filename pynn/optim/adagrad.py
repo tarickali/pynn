@@ -1,14 +1,17 @@
 import numpy as np
 
 from pynn.core import Optimizer
-from pynn.core.optimizer import ParameterSource
+from pynn.core.optimizer import ParameterSource, effective_gradient
 from pynn.utils.tensor import get_data_and_grad
 
 __all__ = ["Adagrad"]
 
 
 class Adagrad(Optimizer):
-    """Adagrad optimizer."""
+    """Adagrad optimizer.
+
+    Written in place — see `pynn.core.optimizer` for what that costs and why.
+    """
 
     def __init__(
         self,
@@ -37,17 +40,22 @@ class Adagrad(Optimizer):
         for params, cache in zip(self.trainable_parameters(), self.cache, strict=True):
             for key, param in params.items():
                 data, grad = get_data_and_grad(param)
-                g = -grad if self.maximize else grad
-                g = g + self.weight_decay * data
+                g = effective_gradient(grad, data, self.weight_decay, self.maximize)
                 lr = self.learning_rate / (1 + (t - 1) * self.learning_rate_decay)
-                if key not in cache["sum"]:
-                    cache["sum"][key] = np.full_like(
-                        data, self.initial_accumulator_value
-                    )
-                cache["sum"][key] = cache["sum"][key] + (g**2)
-                param.data = param.data - lr * g / (
-                    np.sqrt(cache["sum"][key]) + self.eps
-                )
+
+                total = cache["sum"].get(key)
+                if total is None:
+                    # `data` rather than `g`, since the accumulator's starting value is
+                    # a hyperparameter and the gradient only supplies the shape.
+                    total = np.full_like(data, self.initial_accumulator_value)
+                    cache["sum"][key] = total
+                total += g**2
+
+                denominator = np.sqrt(total)
+                denominator += self.eps
+                step = lr * g
+                step /= denominator
+                data -= step
         self.increment()
 
     def reset(self) -> None:
