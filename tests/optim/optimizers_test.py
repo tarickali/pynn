@@ -23,6 +23,9 @@ from pynn.optim import (
     AdamW,
     CosineAnnealingLR,
     ExponentialLR,
+    NAdam,
+    OneCycleLR,
+    ReduceLROnPlateau,
     RMSprop,
     StepLR,
     clip_grad_norm,
@@ -236,10 +239,117 @@ def test_adadelta():
 
 
 # --------------------------------------------------------------------------- #
+# NAdam
+#
+# The reference below is the published rule, in float64 throughout. It is worth
+# noting that `torch.optim.NAdam` disagrees with it by about 1e-10 on a float64
+# parameter, because it keeps `mu_product` and `step` as float32 tensors regardless
+# of the parameter's dtype. Transcribing the rule rather than deferring to torch is
+# the point of these tests, and this is the case where it shows.
+# --------------------------------------------------------------------------- #
+
+
+def nadam_reference(
+    lr=0.01,
+    beta_1=0.9,
+    beta_2=0.999,
+    eps=1e-8,
+    momentum_decay=0.004,
+    decay=0.0,
+    decoupled=False,
+    gradient=GRADIENT,
+):
+    """The published NAdam update, transcribed with plain floats."""
+    expected, value, m, v, mu_product = [], START, 0.0, 0.0, 1.0
+    for step in range(1, STEPS + 1):
+        g = gradient + (0.0 if decoupled else decay * value)
+        mu = beta_1 * (1 - 0.5 * 0.96 ** (step * momentum_decay))
+        mu_next = beta_1 * (1 - 0.5 * 0.96 ** ((step + 1) * momentum_decay))
+        mu_product *= mu
+
+        m = beta_1 * m + (1 - beta_1) * g
+        v = beta_2 * v + (1 - beta_2) * g**2
+
+        mhat = mu_next * m / (1 - mu_product * mu_next) + (1 - mu) * g / (
+            1 - mu_product
+        )
+        vhat = v / (1 - beta_2**step)
+
+        if decoupled:
+            value -= lr * decay * value
+        value -= lr * mhat / (np.sqrt(vhat) + eps)
+        expected.append(value)
+    return expected
+
+
+def test_nadam():
+    assert run_optimizer(NAdam, learning_rate=0.01) == pytest.approx(
+        nadam_reference(), rel=1e-12
+    )
+
+
+def test_nadam_weight_decay():
+    trajectory = run_optimizer(NAdam, learning_rate=0.01, weight_decay=0.1)
+    assert trajectory == pytest.approx(nadam_reference(decay=0.1), rel=1e-12)
+
+
+def test_nadam_decoupled_weight_decay():
+    trajectory = run_optimizer(
+        NAdam, learning_rate=0.01, weight_decay=0.1, decoupled_weight_decay=True
+    )
+    assert trajectory == pytest.approx(
+        nadam_reference(decay=0.1, decoupled=True), rel=1e-12
+    )
+    assert trajectory != pytest.approx(nadam_reference(decay=0.1))
+
+
+def test_nadam_momentum_decay_changes_the_warmup():
+    trajectory = run_optimizer(NAdam, learning_rate=0.01, momentum_decay=0.02)
+    assert trajectory == pytest.approx(nadam_reference(momentum_decay=0.02), rel=1e-12)
+    assert trajectory != pytest.approx(nadam_reference())
+
+
+def test_nadam_mu_product_is_a_running_product_not_a_power():
+    """The bias correction for a coefficient that changes every step.
+
+    `beta_1 ** t` is the tempting shortcut and is wrong, because `mu` warms up rather
+    than staying put. Recomputing the product here is what catches it.
+    """
+    param = Tensor(np.array([START]))
+    optimizer = NAdam([{"w": param}], learning_rate=0.01)
+
+    expected = 1.0
+    for step in range(1, 5):
+        param.grad = np.array([GRADIENT])
+        optimizer.update()
+        expected *= 0.9 * (1 - 0.5 * 0.96 ** (step * 0.004))
+        assert optimizer.mu_product == pytest.approx(expected, rel=1e-14)
+        assert optimizer.mu_product != pytest.approx(0.9**step)
+
+
+def test_nadam_reset_clears_the_mu_product():
+    param = Tensor(np.array([START]))
+    optimizer = NAdam([{"w": param}], learning_rate=0.01)
+    for _ in range(3):
+        param.grad = np.array([GRADIENT])
+        optimizer.update()
+
+    optimizer.reset()
+    assert optimizer.mu_product == 1.0
+
+
+def test_nadam_differs_from_adam():
+    """Otherwise the Nesterov terms could be present and cancelling."""
+    assert run_optimizer(NAdam, learning_rate=0.01) != pytest.approx(
+        run_optimizer(Adam, learning_rate=0.01)
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Behavior shared by every optimizer
 # --------------------------------------------------------------------------- #
 
-ALL_OPTIMIZERS = [SGD, Adam, RMSprop, Adagrad, Adadelta]
+ALL_OPTIMIZERS = [SGD, Adam, RMSprop, Adagrad, Adadelta, NAdam]
 
 # Every flag combination that takes a different path through an update rule. The
 # arithmetic is covered by the closed-form references above; these exist because the
@@ -255,6 +365,10 @@ IN_PLACE_FLAGS = [
     (Adam, {}),
     (Adam, {"amsgrad": True}),
     (Adam, {"weight_decay": 0.1}),
+    (NAdam, {}),
+    (NAdam, {"weight_decay": 0.1}),
+    (NAdam, {"weight_decay": 0.1, "decoupled_weight_decay": True}),
+    (NAdam, {"momentum_decay": 0.02}),
     (AdamW, {}),
     (AdamW, {"weight_decay": 0.0}),
     (AdamW, {"amsgrad": True}),
@@ -776,3 +890,252 @@ def test_clipping_rescues_a_run_that_a_single_batch_would_otherwise_wreck(rng):
         return float(loss_fn(y, model(X)).item())
 
     assert train(clip=True) < train(clip=False)
+
+
+# --------------------------------------------------------------------------- #
+# OneCycleLR
+# --------------------------------------------------------------------------- #
+
+
+def one_cycle(total_steps=10, **kwargs):
+    optimizer = SGD([{"w": Tensor(np.array([START]))}], learning_rate=999.0)
+    schedule = OneCycleLR(optimizer, max_lr=1.0, total_steps=total_steps, **kwargs)
+    values = [optimizer.learning_rate]
+    for _ in range(total_steps):
+        schedule.step()
+        values.append(optimizer.learning_rate)
+    return values
+
+
+def test_one_cycle_starts_below_the_peak_and_ends_far_below_it():
+    values = one_cycle(div_factor=25.0, final_div_factor=1e4)
+
+    assert values[0] == pytest.approx(1.0 / 25.0)
+    assert max(values) == pytest.approx(1.0)
+    assert values[-1] == pytest.approx(1.0 / 25.0 / 1e4)
+
+
+def test_one_cycle_peaks_at_pct_start():
+    """The warmup ends where it was told to, not at the midpoint."""
+    values = one_cycle(total_steps=100, pct_start=0.3)
+
+    assert np.argmax(values) == 30
+
+
+def test_one_cycle_rises_then_falls():
+    values = one_cycle(total_steps=40, pct_start=0.25)
+    peak = int(np.argmax(values))
+
+    assert all(a < b for a, b in pairwise(values[: peak + 1]))
+    assert all(a > b for a, b in pairwise(values[peak:]))
+
+
+def test_one_cycle_ignores_the_optimizers_own_rate():
+    """It is defined by max_lr, unlike every other schedule here."""
+    assert one_cycle()[0] == pytest.approx(1.0 / 25.0)
+
+
+def test_one_cycle_linear_anneal_differs_from_cosine():
+    cosine = one_cycle(total_steps=20, anneal_strategy="cos")
+    linear = one_cycle(total_steps=20, anneal_strategy="linear")
+
+    assert cosine[0] == pytest.approx(linear[0])
+    assert cosine[-1] == pytest.approx(linear[-1])
+    assert cosine != pytest.approx(linear)
+
+
+def test_one_cycle_linear_warmup_is_a_straight_line():
+    values = one_cycle(total_steps=10, pct_start=0.5, anneal_strategy="linear")
+    warmup = values[:6]
+
+    increments = np.diff(warmup)
+    assert np.allclose(increments, increments[0])
+
+
+def test_one_cycle_refuses_to_be_stepped_past_its_total():
+    """Continuing to return the floor would hide a wrong `total_steps`."""
+    optimizer = SGD([{"w": Tensor(np.array([START]))}], learning_rate=0.1)
+    schedule = OneCycleLR(optimizer, max_lr=1.0, total_steps=3)
+    for _ in range(3):
+        schedule.step()
+
+    with pytest.raises(ValueError, match="built for 3 steps"):
+        schedule.step()
+
+
+@pytest.mark.parametrize(
+    "kwargs,message",
+    [
+        ({"total_steps": 0}, "total_steps must be positive"),
+        ({"total_steps": 5, "pct_start": 0.0}, r"pct_start must be in \(0, 1\)"),
+        ({"total_steps": 5, "pct_start": 1.0}, r"pct_start must be in \(0, 1\)"),
+        ({"total_steps": 5, "div_factor": 0.0}, "must be positive"),
+        ({"total_steps": 5, "final_div_factor": -1.0}, "must be positive"),
+        ({"total_steps": 5, "anneal_strategy": "quadratic"}, "'cos' or 'linear'"),
+    ],
+)
+def test_one_cycle_rejects_invalid_arguments(kwargs, message):
+    optimizer = SGD([{"w": Tensor(np.array([START]))}], learning_rate=0.1)
+    with pytest.raises(ValueError, match=message):
+        OneCycleLR(optimizer, max_lr=1.0, **kwargs)
+
+
+def test_one_cycle_round_trips_through_its_state_dict():
+    optimizer, schedule = make_scheduled(OneCycleLR, max_lr=1.0, total_steps=20)
+    for _ in range(7):
+        schedule.step()
+    expected = optimizer.learning_rate
+
+    other_optimizer, other = make_scheduled(
+        OneCycleLR, base_lr=999.0, max_lr=1.0, total_steps=20
+    )
+    other.load_state_dict(schedule.state_dict())
+
+    assert other_optimizer.learning_rate == pytest.approx(expected)
+
+
+# --------------------------------------------------------------------------- #
+# ReduceLROnPlateau
+#
+# The one schedule that is not a function of the epoch, so it is not an LRScheduler
+# and its `step` takes the metric it watches.
+# --------------------------------------------------------------------------- #
+
+
+def plateau(metrics, **kwargs):
+    optimizer = SGD([{"w": Tensor(np.array([START]))}], learning_rate=1.0)
+    schedule = ReduceLROnPlateau(optimizer, **kwargs)
+    return [schedule.step(metric) for metric in metrics]
+
+
+def test_plateau_reduces_after_patience_is_exceeded():
+    """Patience is how many bad epochs to *tolerate*, so the cut is on the next one."""
+    rates = plateau([1.0, 1.0, 1.0, 1.0], patience=2, factor=0.5)
+
+    assert rates == pytest.approx([1.0, 1.0, 1.0, 0.5])
+
+
+def test_plateau_leaves_an_improving_metric_alone():
+    rates = plateau([1.0, 0.5, 0.25, 0.1, 0.05], patience=0, factor=0.5)
+
+    assert rates == pytest.approx([1.0] * 5)
+
+
+def test_plateau_resets_the_counter_on_an_improvement():
+    improving = plateau([1.0, 1.0, 0.1, 1.0, 1.0, 1.0], patience=1, factor=0.5)
+    flat = plateau([1.0] * 6, patience=1, factor=0.5)
+
+    # The improvement at index 2 puts the bad-epoch count back to zero, so the first
+    # cut lands two epochs later than it does with no improvement at all.
+    assert improving == pytest.approx([1.0, 1.0, 1.0, 1.0, 0.5, 0.5])
+    assert flat == pytest.approx([1.0, 1.0, 0.5, 0.5, 0.25, 0.25])
+
+
+def test_plateau_max_mode_watches_for_a_metric_that_should_rise():
+    rising = plateau([0.1, 0.5, 0.9], mode="max", patience=0, factor=0.5)
+    flat = plateau([0.9, 0.9, 0.9], mode="max", patience=0, factor=0.5)
+
+    assert rising == pytest.approx([1.0, 1.0, 1.0])
+    assert flat == pytest.approx([1.0, 0.5, 0.25])
+
+
+def test_plateau_threshold_ignores_an_improvement_too_small_to_count():
+    """Noise around a plateau would otherwise keep the counter at zero forever."""
+    noisy = [1.0, 0.99999, 0.99998, 0.99997]
+
+    assert plateau(noisy, patience=1, factor=0.5, threshold=1e-4) == pytest.approx(
+        [1.0, 1.0, 0.5, 0.5]
+    )
+    assert plateau(noisy, patience=1, factor=0.5, threshold=0.0) == pytest.approx(
+        [1.0] * 4
+    )
+
+
+def test_absolute_threshold_differs_from_relative():
+    """A drop of 1 from 100: 1% of the best, but twenty times an absolute 0.05."""
+    metrics = [100.0, 99.0, 99.0]
+
+    relative = plateau(metrics, patience=0, factor=0.5, threshold=0.05)
+    absolute = plateau(
+        metrics, patience=0, factor=0.5, threshold=0.05, threshold_mode="abs"
+    )
+
+    # Relative wants better than 95.0, so 99.0 is a plateau and both epochs cut.
+    assert relative == pytest.approx([1.0, 0.5, 0.25])
+    # Absolute wants better than 99.95, so the first 99.0 is an improvement.
+    assert absolute == pytest.approx([1.0, 1.0, 0.5])
+
+
+def test_plateau_cooldown_pauses_the_counter_after_a_reduction():
+    without = plateau([1.0] * 6, patience=0, factor=0.5, cooldown=0)
+    with_cooldown = plateau([1.0] * 6, patience=0, factor=0.5, cooldown=2)
+
+    assert without == pytest.approx([1.0, 0.5, 0.25, 0.125, 0.0625, 0.03125])
+    # Two epochs of silence after each cut, so a third as many reductions.
+    assert with_cooldown == pytest.approx([1.0, 0.5, 0.5, 0.5, 0.25, 0.25])
+
+
+def test_plateau_clamps_at_min_lr():
+    rates = plateau([1.0] * 8, patience=0, factor=0.1, min_lr=0.01)
+
+    assert min(rates) == pytest.approx(0.01)
+
+
+def test_plateau_accepts_a_scalar_tensor():
+    """The metric is usually a loss that just came off the tape."""
+    rates = plateau([Tensor(np.array(1.0))] * 3, patience=0, factor=0.5)
+
+    assert rates == pytest.approx([1.0, 0.5, 0.25])
+
+
+def test_plateau_round_trips_through_its_state_dict():
+    optimizer = SGD([{"w": Tensor(np.array([START]))}], learning_rate=1.0)
+    schedule = ReduceLROnPlateau(optimizer, patience=2, factor=0.5)
+    for metric in [1.0, 1.0]:
+        schedule.step(metric)
+
+    other = ReduceLROnPlateau(
+        SGD([{"w": Tensor(np.array([START]))}], learning_rate=1.0),
+        patience=2,
+        factor=0.5,
+    )
+    other.load_state_dict(schedule.state_dict())
+
+    assert other.best == schedule.best
+    assert other.num_bad_epochs == schedule.num_bad_epochs
+    assert other.last_epoch == schedule.last_epoch
+
+
+def test_plateau_is_not_an_lr_scheduler():
+    """Its `step` takes an argument, so sharing the base class would break it."""
+    from pynn.optim import LRScheduler
+
+    optimizer = SGD([{"w": Tensor(np.array([START]))}], learning_rate=1.0)
+    assert not isinstance(ReduceLROnPlateau(optimizer), LRScheduler)
+
+
+def test_plateau_repr_reports_where_it_stands():
+    optimizer = SGD([{"w": Tensor(np.array([START]))}], learning_rate=1.0)
+    schedule = ReduceLROnPlateau(optimizer, patience=1)
+    schedule.step(0.5)
+
+    text = repr(schedule)
+    assert "ReduceLROnPlateau" in text
+    assert "best=0.5" in text
+
+
+@pytest.mark.parametrize(
+    "kwargs,message",
+    [
+        ({"mode": "minimum"}, "mode must be"),
+        ({"threshold_mode": "relative"}, "threshold_mode must be"),
+        ({"factor": 1.0}, r"factor must be in \(0, 1\)"),
+        ({"factor": 0.0}, r"factor must be in \(0, 1\)"),
+        ({"patience": -1}, "must be non-negative"),
+        ({"cooldown": -1}, "must be non-negative"),
+    ],
+)
+def test_plateau_rejects_invalid_arguments(kwargs, message):
+    optimizer = SGD([{"w": Tensor(np.array([START]))}], learning_rate=1.0)
+    with pytest.raises(ValueError, match=message):
+        ReduceLROnPlateau(optimizer, **kwargs)

@@ -10,6 +10,29 @@ While the major version is 0, the public API may change between minor versions.
 
 ### Added
 
+- **`NAdam`**, Adam with Nesterov momentum. Two details it is easy to get subtly wrong
+  in a way that still trains, so both are pinned by the reference test: `mu` is not a
+  constant but follows its own warmup, `beta_1 * (1 - 0.5 * 0.96 ** (t * psi))`; and
+  the bias-correction denominators are running *products* of every `mu` so far rather
+  than powers of one of them, which is what makes them correct for a coefficient that
+  changes each step. `weight_decay` is coupled by default with `decoupled_weight_decay`
+  for the AdamW treatment. The closed-form reference is transcribed in float64
+  throughout, which turned out to matter: `torch.optim.NAdam` keeps `mu_product` and
+  `step` as **float32** tensors regardless of the parameter's dtype, so on a float64
+  parameter it disagrees with the published rule by about 1e-10 over a few steps. This
+  implementation matches the reference exactly; the external comparison against torch
+  is sized for torch's error, and says so.
+- **`OneCycleLR` and `ReduceLROnPlateau`.** `OneCycleLR` is stepped per batch —
+  `total_steps` is `epochs * steps_per_epoch` — and warms up from `max_lr / div_factor`
+  to `max_lr` over `pct_start` of the run before annealing four orders of magnitude
+  below it, cosine or linear. It refuses to be stepped past `total_steps` rather than
+  flattening out, since running past the end means the number it was built with was
+  wrong. Momentum is deliberately not cycled: that would mean writing an attribute only
+  some optimizers have. `ReduceLROnPlateau` is **not** an `LRScheduler` and that is the
+  point — every other schedule here is a pure function of the epoch, which is what
+  makes them resumable from `last_epoch` alone, while this one reads a metric and takes
+  it as an argument to `step`. It accepts a scalar `Tensor`, since the value being
+  watched is usually a loss that just came off the tape.
 - **`KLDivLoss` and `HingeLoss`**, both through the shared `_reduce` helper so the three
   reduction modes cannot drift apart. KL divergence differs from cross-entropy only by
   the target's own entropy, so the two have *identical gradients* — the value is what

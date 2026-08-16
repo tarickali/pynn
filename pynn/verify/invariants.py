@@ -45,6 +45,9 @@ from pynn.optim import (
     AdamW,
     CosineAnnealingLR,
     ExponentialLR,
+    NAdam,
+    OneCycleLR,
+    ReduceLROnPlateau,
     RMSprop,
     StepLR,
     clip_grad_norm,
@@ -90,7 +93,7 @@ INITIALIZER_NAMES = [
     "zeros",
 ]
 
-ALL_OPTIMIZERS = [SGD, Adam, RMSprop, Adagrad, Adadelta]
+ALL_OPTIMIZERS = [SGD, Adam, RMSprop, Adagrad, Adadelta, NAdam]
 
 
 def check_autodiff() -> CheckReport:
@@ -393,6 +396,7 @@ def _describe(flags: dict[str, float | bool]) -> str:
 _IN_PLACE_CASES: list[tuple[type, list[dict[str, float | bool]]]] = [
     (SGD, [{}, {"momentum": 0.9}, {"momentum": 0.9, "nesterov": True}]),
     (Adam, [{}, {"amsgrad": True}, {"weight_decay": 0.1}]),
+    (NAdam, [{}, {"weight_decay": 0.1}, {"decoupled_weight_decay": True}]),
     (AdamW, [{}, {"weight_decay": 0.0}, {"amsgrad": True}]),
     (RMSprop, [{}, {"centered": True}, {"momentum": 0.9}]),
     (Adagrad, [{}, {"initial_accumulator_value": 0.5}]),
@@ -646,6 +650,67 @@ def check_training() -> CheckReport:
         "CosineAnnealingLR reaches eta_min at T_max",
         bool(np.isclose(annealed[0], 0.1) and np.isclose(annealed[-1], 0.001)),
         f"{annealed[0]:.4f} -> {annealed[-1]:.4f}",
+    )
+
+    # OneCycleLR is defined by `max_lr` rather than by the optimizer's own rate, so
+    # both ends and the position of the peak are worth pinning: a warmup that ended at
+    # the midpoint rather than at `pct_start` would still rise and fall.
+    cycle = rates(OneCycleLR, epochs=100, max_lr=1.0, total_steps=100, pct_start=0.3)
+    report.add(
+        "OneCycleLR starts at max_lr / div_factor",
+        bool(np.isclose(cycle[0], 1.0 / 25.0)),
+        f"started at {cycle[0]:.4f}",
+    )
+    report.add(
+        "OneCycleLR peaks at pct_start",
+        int(np.argmax(cycle)) == 30 and bool(np.isclose(max(cycle), 1.0)),
+        f"peak of {max(cycle):.4f} at step {int(np.argmax(cycle))}",
+    )
+    report.add(
+        "OneCycleLR anneals far below where it started",
+        bool(np.isclose(cycle[-1], 1.0 / 25.0 / 1e4)),
+        f"ended at {cycle[-1]:.3g}",
+    )
+
+    # ReduceLROnPlateau is the one schedule driven by a metric rather than by the
+    # epoch, and the property that matters is that it can tell the two apart: an
+    # improving metric must leave the rate alone, and a flat one must not.
+    def plateau_rates(metrics: list[float], **kwargs) -> list[float]:
+        optimizer = SGD([{"w": Tensor(np.array([1.0]))}], learning_rate=1.0)
+        schedule = ReduceLROnPlateau(optimizer, **kwargs)
+        return [schedule.step(metric) for metric in metrics]
+
+    report.add(
+        "ReduceLROnPlateau leaves an improving metric alone",
+        bool(
+            np.allclose(
+                plateau_rates([1.0, 0.5, 0.25, 0.1], patience=0, factor=0.5), 1.0
+            )
+        ),
+    )
+    plateaued = plateau_rates([1.0, 1.0, 1.0, 1.0], patience=1, factor=0.5)
+    report.add(
+        "ReduceLROnPlateau cuts the rate once patience is exceeded",
+        bool(np.allclose(plateaued, [1.0, 1.0, 0.5, 0.5])),
+        f"got {plateaued}",
+    )
+    report.add(
+        "ReduceLROnPlateau honors min_lr",
+        bool(
+            np.isclose(
+                min(plateau_rates([1.0] * 8, patience=0, factor=0.1, min_lr=0.01)),
+                0.01,
+            )
+        ),
+    )
+    report.add(
+        "ReduceLROnPlateau reads a metric rather than the epoch",
+        # Same number of steps, opposite metrics: a schedule that ignored its argument
+        # would produce the same trajectory for both.
+        not np.allclose(
+            plateau_rates([1.0, 0.9, 0.8, 0.7], patience=0, factor=0.5),
+            plateau_rates([1.0, 1.0, 1.0, 1.0], patience=0, factor=0.5),
+        ),
     )
 
     # A schedule that computed rates nobody read would satisfy every check above.

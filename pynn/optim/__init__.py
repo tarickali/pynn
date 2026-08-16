@@ -8,8 +8,11 @@ from pynn.optim.lr_scheduler import (
     CosineAnnealingLR,
     ExponentialLR,
     LRScheduler,
+    OneCycleLR,
+    ReduceLROnPlateau,
     StepLR,
 )
+from pynn.optim.nadam import NAdam
 from pynn.optim.rmsprop import RMSprop
 from pynn.optim.sgd import SGD
 
@@ -22,8 +25,11 @@ __all__ = [
     "CosineAnnealingLR",
     "ExponentialLR",
     "LRScheduler",
+    "NAdam",
+    "OneCycleLR",
     "Optimizer",
     "RMSprop",
+    "ReduceLROnPlateau",
     "StepLR",
     "clip_grad_norm",
     "clip_grad_value",
