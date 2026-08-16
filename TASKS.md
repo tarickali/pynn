@@ -31,7 +31,7 @@ Each is small and independent; this is the pile to draw from when time is short.
 | Losses | `KLDivLoss`, `HingeLoss` |
 | Optimizers | `NAdam` |
 | Schedules | `ReduceLROnPlateau`, `OneCycleLR`, warmup |
-| Layers | `ConvTranspose2d` (enables an autoencoder example), `Unflatten` as the inverse of `Flatten`, `Identity` as a layer |
+| Layers | `ConvTranspose2d` (enables an autoencoder example). ~~`Unflatten`~~, ~~`Identity`~~ done |
 | Metrics | a `pynn.metrics` module: accuracy, precision / recall / F1, confusion matrix, MSE / MAE / R² |
 | Ops | `index_update`, the differentiable write — the one below with an argument behind it |
 

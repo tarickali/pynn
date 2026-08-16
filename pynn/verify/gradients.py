@@ -43,6 +43,7 @@ from pynn.functional.modules import (
     layer_norm,
     linear,
     max_pool2d,
+    unflatten,
 )
 from pynn.nn import LSTMCell, RNNCell
 from pynn.verify.report import CheckReport, CheckResult
@@ -767,6 +768,35 @@ def gradient_cases(seed: int = DEFAULT_SEED) -> list[GradientCase]:
             "flatten",
             lambda ts: pmath.sum(flatten(ts[0]) * ts[1]),
             [normal(2, 3, 4), normal(2, 12)],
+        ),
+        (
+            "flatten with a reused input",
+            lambda ts: pmath.sum(flatten(ts[0]) * ts[1]) + pmath.sum(ts[0] * ts[2]),
+            [normal(2, 3, 4), normal(2, 12), normal(2, 3, 4)],
+        ),
+        (
+            "unflatten",
+            lambda ts: pmath.sum(unflatten(ts[0], (3, 4)) * ts[1]),
+            [normal(2, 12), normal(2, 3, 4)],
+        ),
+        (
+            "unflatten with an inferred axis",
+            lambda ts: pmath.sum(unflatten(ts[0], (3, -1)) * ts[1]),
+            [normal(2, 12), normal(2, 3, 4)],
+        ),
+        (
+            "unflatten with a reused input",
+            lambda ts: (
+                pmath.sum(unflatten(ts[0], (3, 4)) * ts[1]) + pmath.sum(ts[0] * ts[2])
+            ),
+            [normal(2, 12), normal(2, 3, 4), normal(2, 12)],
+        ),
+        # The round trip, which is the claim the pair makes: a gradient that goes in
+        # comes back through both layouts unchanged.
+        (
+            "flatten then unflatten",
+            lambda ts: pmath.sum(unflatten(flatten(ts[0]), (3, 4)) * ts[1]),
+            [normal(2, 3, 4), normal(2, 3, 4)],
         ),
     ]
     for stride, padding in [

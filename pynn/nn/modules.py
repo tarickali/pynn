@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 
@@ -13,6 +13,7 @@ from pynn.functional.modules import (
     layer_norm,
     linear,
     max_pool2d,
+    unflatten,
 )
 from pynn.nn.factories import activation_factory, initializer_factory
 from pynn.utils.array import make_pair
@@ -25,9 +26,11 @@ __all__ = [
     "Conv2d",
     "Dropout",
     "Flatten",
+    "Identity",
     "LayerNorm",
     "Linear",
     "MaxPool2d",
+    "Unflatten",
 ]
 
 
@@ -235,6 +238,8 @@ class Conv2d(Module):
 
 
 class Flatten(Module):
+    """Collapse every axis past the batch axis into one."""
+
     def __init__(self, name: str = "Flatten") -> None:
         super().__init__()
         self.name = name
@@ -247,7 +252,56 @@ class Flatten(Module):
         return {}
 
 
+class Unflatten(Module):
+    """Inverse of `Flatten`: split the flattened axis back into `shape`.
+
+    Takes the trailing shape of *one example*, not the whole output shape — the batch
+    axis is read from the input:
+
+    ```python
+    Sequential([Linear(64, 50), Unflatten(2, 5, 5), Conv2d(2, 4, 3)])
+    ```
+
+    That is deliberately narrower than a general `Reshape` layer, which this library
+    does not have. A reshape whose target includes the batch size is right for every
+    batch of an epoch except the last, smaller one, and the symptom is a shape error
+    partway through the first epoch rather than at the line that caused it. Anything
+    genuinely needing the general form has `Tensor.reshape`, which is differentiable.
+
+    Parameters
+    ----------
+    *shape : int | tuple[int, ...]
+        The trailing axes, as `Unflatten(2, 5, 5)` or `Unflatten((2, 5, 5))`. One entry
+        may be `-1` and is inferred.
+    name : str, default "Unflatten"
+    """
+
+    def __init__(self, *shape: int | tuple[int, ...], name: str = "Unflatten") -> None:
+        super().__init__()
+        if len(shape) == 1 and isinstance(shape[0], tuple):
+            resolved = shape[0]
+        else:
+            resolved = cast("tuple[int, ...]", shape)
+        self.shape = resolved
+        self.name = name
+
+    def forward(self, X: Tensor) -> Tensor:
+        return unflatten(X, self.shape)
+
+    @property
+    def hyperparameters(self) -> dict[str, Any]:
+        return {"shape": self.shape}
+
+
 class Activation(Module):
+    """A `Module` wrapping one of the stateless activations, so a container can hold it.
+
+    `pynn.functional`'s activations are functions and `pynn.nn.activations`' are
+    stateless `Activation` objects (`pynn.core.Activation`, a different class from this
+    one); neither is a `Module`, so neither can go into a `Sequential`. This is the
+    adapter, and `activation="relu"` on a layer goes through the same factory.
+    """
+
     def __init__(
         self, activation: str | dict[str, Any], name: str = "Activation"
     ) -> None:
@@ -263,6 +317,24 @@ class Activation(Module):
     @property
     def hyperparameters(self) -> dict[str, Any]:
         return {"activation": self.activation}
+
+
+class Identity(Activation):
+    """A layer that returns its input unchanged.
+
+    The placeholder: `BatchNorm2d() if normalize else Identity()` keeps a `Sequential`
+    the same length either way, so an ablation changes one line rather than the shape
+    of the model — which is what `nn.Identity` is for in PyTorch too.
+
+    Note the pair, since the name appears twice. This is the **layer**, and it is what a
+    container holds. `pynn.nn.activations.Identity` is the stateless `Activation` that
+    `activation_factory("identity")` returns and that a layer's `activation=` argument
+    binds to; it is not a `Module` and cannot go into a `Sequential`. Only this one is
+    exported from `pynn.nn`.
+    """
+
+    def __init__(self, name: str = "Identity") -> None:
+        super().__init__("identity", name=name)
 
 
 class Dropout(Module):

@@ -4,8 +4,18 @@ import numpy as np
 import pytest
 
 import pynn.core.math as pmath
+import pynn.nn.activations as activations
 from pynn.core import Tensor
-from pynn.nn import Activation, Conv2d, Flatten, Linear
+from pynn.nn import (
+    Activation,
+    Conv2d,
+    Flatten,
+    Identity,
+    Linear,
+    ReLU,
+    Sequential,
+    Unflatten,
+)
 
 # --------------------------------------------------------------------------- #
 # Conv2d bias
@@ -179,6 +189,76 @@ def test_activation_layer_has_no_parameters():
     layer = Activation("relu")
     layer(Tensor(np.zeros((2, 3))))
     assert layer.parameters == {}
+
+
+# --------------------------------------------------------------------------- #
+# Unflatten and Identity
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "spelling", [(2, 3, 5), ((2, 3, 5),)], ids=["varargs", "tuple"]
+)
+def test_unflatten_splits_the_flattened_axis(spelling):
+    assert Unflatten(*spelling)(Tensor(np.zeros((4, 30)))).shape == (4, 2, 3, 5)
+
+
+def test_unflatten_infers_one_axis():
+    assert Unflatten(2, -1)(Tensor(np.zeros((4, 30)))).shape == (4, 2, 15)
+
+
+def test_unflatten_reads_the_batch_size_from_the_input():
+    """The reason it is not a Reshape layer taking the whole target shape.
+
+    A shape with the batch size baked in is right for every batch of an epoch except
+    the last, shorter one.
+    """
+    layer = Unflatten(2, 3, 5)
+
+    assert layer(Tensor(np.zeros((4, 30)))).shape == (4, 2, 3, 5)
+    assert layer(Tensor(np.zeros((1, 30)))).shape == (1, 2, 3, 5)
+
+
+def test_unflatten_inverts_flatten():
+    X = Tensor(np.arange(120.0).reshape(4, 2, 3, 5))
+
+    round_tripped = Unflatten(2, 3, 5)(Flatten()(X))
+
+    assert round_tripped.shape == X.shape
+    assert np.array_equal(round_tripped.data, X.data)
+
+
+def test_unflatten_refuses_a_shape_that_does_not_fit():
+    with pytest.raises(ValueError, match="cannot unflatten"):
+        Unflatten(2, 3, 7)(Tensor(np.zeros((4, 30))))
+
+
+def test_unflatten_reports_its_hyperparameters():
+    assert Unflatten(2, 3, 5).hyperparameters == {"shape": (2, 3, 5)}
+
+
+def test_identity_returns_its_input():
+    X = Tensor(np.arange(6.0).reshape(2, 3))
+    output = Identity()(X)
+
+    assert np.array_equal(output.data, X.data)
+    assert Identity().parameters == {}
+
+
+def test_identity_is_a_module_so_a_container_can_hold_it():
+    """The gap it fills: the stateless `Activation` of the same name cannot."""
+    model = Sequential([Linear(3, 4), Identity(), Linear(4, 2)])
+
+    assert model(Tensor(np.zeros((2, 3)))).shape == (2, 2)
+    assert len(model) == 3
+
+
+def test_a_stateless_activation_in_a_container_says_what_to_write_instead():
+    with pytest.raises(TypeError, match=r"pynn\.nn\.Activation"):
+        Sequential([ReLU()])
+
+    with pytest.raises(TypeError, match=r"pynn\.nn\.Identity"):
+        Sequential([activations.Identity()])
 
 
 # --------------------------------------------------------------------------- #

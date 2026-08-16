@@ -18,6 +18,7 @@ __all__ = [
     "layer_norm",
     "linear",
     "max_pool2d",
+    "unflatten",
 ]
 
 
@@ -39,6 +40,63 @@ def flatten(x: Tensor) -> Tensor:
         x.grad += grad
 
     output.forward = "flatten"
+    output.reverse = reverse
+
+    return output
+
+
+def unflatten(x: Tensor, shape: Shape) -> Tensor:
+    """Inverse of `flatten`: restore the trailing axes it collapsed.
+
+    `flatten` maps ``(batch, d1, d2, ...)`` to ``(batch, d1*d2*...)``; this maps
+    ``(batch, n)`` back to ``(batch, *shape)``. The batch axis is read from the input
+    rather than taken from `shape`, which is the difference between this and a general
+    reshape: a layer that carried the batch size in its target shape would work for
+    every batch of an epoch except the last, smaller one.
+
+    One entry of `shape` may be ``-1`` and is inferred, as it is in NumPy.
+
+    Parameters
+    ----------
+    x : Tensor
+        Input whose axes past the first are to be re-laid out.
+    shape : Shape
+        Trailing axes of the result.
+
+    Returns
+    -------
+    Tensor
+        Shape ``(batch, *shape)``.
+
+    Raises
+    ------
+    ValueError
+        If one example's elements cannot be laid out as `shape`.
+
+    Examples
+    --------
+    >>> unflatten(Tensor(np.zeros((8, 50))), (2, 5, 5)).shape
+    (8, 2, 5, 5)
+    """
+    x = x if isinstance(x, Tensor) else Tensor(x)
+    array = x.data
+    target = (array.shape[0], *shape)
+    try:
+        data = array.reshape(target)
+    except ValueError as error:
+        raise ValueError(
+            f"cannot unflatten {array.shape} into {target}: one example holds "
+            f"{int(np.prod(array.shape[1:]))} elements"
+        ) from error
+
+    output = Tensor(data)
+    output.add_children((x,))
+
+    def reverse():
+        # Re-laying out an array moves no data, so the reverse is the inverse layout.
+        x.grad += output.grad.reshape(array.shape)
+
+    output.forward = "unflatten"
     output.reverse = reverse
 
     return output

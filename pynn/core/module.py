@@ -7,6 +7,7 @@ from typing import Any
 
 import numpy as np
 
+from pynn.core.activation import Activation
 from pynn.core.tensor import Tensor
 from pynn.core.types import Array, Shape
 
@@ -39,6 +40,23 @@ def _reject_plain_container(name: str, value: Any) -> None:
             "would not be registered, so those modules would receive gradients but "
             f"never be updated by an optimizer. Wrap it in pynn.nn.{wrapper}."
         )
+
+
+def _hint(value: Any) -> str:
+    """A suffix naming the fix, when the thing handed to a container has one.
+
+    `Sequential([ReLU()])` is the natural thing to write and does not work: the
+    stateless activations are `Activation` objects rather than Modules, so a container
+    cannot hold one. "expected a Module, got ReLU" is true and leaves the reader no
+    better off, hence this.
+    """
+    if isinstance(value, Activation):
+        return (
+            ". The stateless activations are not Modules; wrap it in "
+            'pynn.nn.Activation, e.g. pynn.nn.Activation("relu"), or use '
+            "pynn.nn.Identity() for the identity"
+        )
+    return ""
 
 
 class Module(ABC):
@@ -120,7 +138,9 @@ class Module(ABC):
         use this; attribute assignment registers automatically.
         """
         if not isinstance(module, Module):
-            raise TypeError(f"expected a Module, got {type(module).__name__}")
+            raise TypeError(
+                f"expected a Module, got {type(module).__name__}{_hint(module)}"
+            )
         self._modules[name] = module
         return module
 

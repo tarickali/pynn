@@ -4,7 +4,6 @@ from pynn.nn.activations import (
     GELU,
     SELU,
     Affine,
-    Identity,
     LogSoftmax,
     PReLU,
     ReLU,
@@ -38,9 +37,11 @@ from pynn.nn.modules import (
     Conv2d,
     Dropout,
     Flatten,
+    Identity,
     LayerNorm,
     Linear,
     MaxPool2d,
+    Unflatten,
 )
 from pynn.nn.recurrent import Embedding, LSTMCell, RNNCell
 
@@ -87,4 +88,5 @@ __all__ = [
     "Softmax",
     "SparseCategoricalCrossentropy",
     "Tanh",
+    "Unflatten",
 ]

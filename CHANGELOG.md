@@ -10,6 +10,25 @@ While the major version is 0, the public API may change between minor versions.
 
 ### Added
 
+- **`Unflatten`, the inverse of `Flatten`**, as a layer and as `pynn.functional.unflatten`.
+  It takes the trailing shape of one *example* — `Unflatten(2, 5, 5)` maps `(batch, 50)`
+  to `(batch, 2, 5, 5)` — and reads the batch size from the input, with one axis
+  allowed to be `-1`. Deliberately narrower than a `Reshape` layer, which this library
+  still does not have: a reshape whose target carries the batch size is correct for
+  every batch of an epoch except the last, shorter one, and `Tensor.reshape` already
+  covers the general case differentiably. Four gradcheck entries, including the
+  reused-input variant and the `flatten`/`unflatten` round trip.
+- **`Identity` as a layer.** `pynn.nn.Identity` is now a `Module`, so
+  `BatchNorm2d() if normalize else Identity()` keeps a `Sequential` the same length
+  either way and an ablation is one line. The stateless activation of the same name is
+  still at `pynn.nn.activations.Identity` — it is what `activation_factory("identity")`
+  returns and what `activation="identity"` binds to — but it is not a Module and only
+  the layer is exported from `pynn.nn`.
+- **A container handed a stateless activation now says what to write instead.**
+  `Sequential([ReLU()])` is the natural thing to try and cannot work, since the
+  activations are `Activation` objects rather than Modules. "expected a Module, got
+  ReLU" was true and unhelpful; the error now names `pynn.nn.Activation("relu")` and
+  `pynn.nn.Identity()`.
 - **Property-based tests over `unbroadcast` and `matrix_multiply_gradients`**, the two
   functions every gradient in the library is routed through. Hypothesis generates
   broadcast-compatible shape pairs and valid matmul operand shapes rather than the
