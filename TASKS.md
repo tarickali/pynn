@@ -28,7 +28,7 @@ Each is small and independent; this is the pile to draw from when time is short.
 | Area | Candidates |
 | --- | --- |
 | Activations | `Mish`, `Hardswish` |
-| Losses | `KLDivLoss`, `HingeLoss` |
+| Losses | ~~`KLDivLoss`~~, ~~`HingeLoss`~~ done |
 | Optimizers | `NAdam` |
 | Schedules | `ReduceLROnPlateau`, `OneCycleLR`, warmup |
 | Layers | `ConvTranspose2d` (enables an autoencoder example). ~~`Unflatten`~~, ~~`Identity`~~ done |

@@ -19,7 +19,12 @@ import pynn.core.math as pmath
 import pynn.functional as F
 from pynn.core import Tensor
 from pynn.core.numeric import stable_sigmoid
-from pynn.functional.losses import binary_crossentropy, categorical_crossentropy
+from pynn.functional.losses import (
+    binary_crossentropy,
+    categorical_crossentropy,
+    hinge,
+    kl_divergence,
+)
 from pynn.verify.report import CheckReport
 
 __all__ = ["check_stability"]
@@ -211,6 +216,41 @@ def check_stability() -> CheckReport:
     report.add(
         "categorical crossentropy gradient is finite for confidently wrong logits",
         _finite(class_logits.grad),
+    )
+
+    # KL divergence has two ways to reach `nan` that cross-entropy does not: the
+    # target's own `y * log y` term at `y = 0`, and `log_softmax` of a logit the
+    # softmax rounds to zero. Both are exercised here at once.
+    kl_logits = Tensor(np.array([[-800.0, 800.0, 0.0]]))
+    kl_targets = Tensor(np.array([[1.0, 0.0, 0.0]]))
+    kl_loss = kl_divergence(kl_targets, kl_logits, logits=True)
+    kl_loss.backward()
+    report.add(
+        "kl divergence is finite for a zero target and extreme logits",
+        _finite(kl_loss.data),
+        f"loss={float(kl_loss.data):.1f}",
+    )
+    report.add(
+        "kl divergence gradient is finite for a zero target and extreme logits",
+        _finite(kl_logits.grad),
+    )
+
+    # The hinge is linear past the margin, so the danger is not overflow but the
+    # arithmetic around it: a score of 1e300 must not become `inf * 0` in the reverse
+    # pass for the examples the hinge has already satisfied.
+    hinge_scores = Tensor(np.array([[-1e300], [1e300]]))
+    hinge_labels = Tensor(np.array([[1.0], [1.0]]))
+    hinge_loss = hinge(hinge_labels, hinge_scores)
+    hinge_loss.backward()
+    report.add(
+        "hinge is finite for extreme scores on both sides of the margin",
+        _finite(hinge_loss.data),
+        f"loss={float(hinge_loss.data):.3g}",
+    )
+    report.add(
+        "hinge gradient is finite and zero past the margin",
+        _finite(hinge_scores.grad) and hinge_scores.grad[1, 0] == 0.0,
+        f"grad={hinge_scores.grad.ravel().tolist()}",
     )
 
     # --- gradients at extreme magnitudes ---------------------------------- #

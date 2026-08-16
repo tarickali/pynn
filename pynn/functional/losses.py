@@ -12,7 +12,9 @@ from pynn.core.types import Array
 __all__ = [
     "binary_crossentropy",
     "categorical_crossentropy",
+    "hinge",
     "huber",
+    "kl_divergence",
     "mean_absolute_error",
     "mean_squared_error",
     "sparse_categorical_crossentropy",
@@ -279,6 +281,146 @@ def sparse_categorical_crossentropy(
     return _reduce(
         per_example, reduction, pred, backward, "sparse_categorical_crossentropy"
     )
+
+
+def kl_divergence(
+    true: Tensor,
+    pred: Tensor,
+    logits: bool = True,
+    reduction: Reduction = "mean",
+) -> Tensor:
+    """Kullback-Leibler divergence ``KL(true || pred)``, summed over the last axis.
+
+    How far the predicted distribution is from the target one, in nats. It differs from
+    cross-entropy by the target's own entropy — a constant with respect to `pred`, so
+    the two have the *same gradient* and train identically. The reason to reach for
+    this one is that it reads zero at a perfect fit rather than at the entropy of the
+    labels, which is what makes it comparable across datasets and what makes it the
+    loss for distillation, where the target is another model's soft distribution.
+
+    Note what ``reduction="mean"`` means here. The sum over classes is the definition,
+    so `_reduce` sees one value per example and averaging gives the mean divergence per
+    example. That is PyTorch's ``reduction="batchmean"``; its ``"mean"`` averages over
+    classes as well and its own documentation says the result is not the KL divergence.
+
+    Parameters
+    ----------
+    true : Tensor
+        Target distribution over the last axis. Not differentiated. Zero entries
+        contribute nothing, taking ``0 * log 0`` as 0.
+    pred : Tensor
+        Logits when ``logits`` is True, otherwise probabilities.
+    logits : bool, default True
+        When True, `log_softmax` is fused in, so ``pred`` is raw scores. That is one
+        difference from PyTorch, whose `KLDivLoss` requires the caller to have applied
+        `log_softmax` already; fusing keeps this loss consistent with the others here
+        and skips a separate exponential.
+    reduction : Reduction, default "mean"
+        Averaged over examples, summed, or returned per example.
+
+    Returns
+    -------
+    Tensor
+        Scalar unless ``reduction="none"``, in which case it has one entry per example.
+    """
+    _check_same_shape(true, pred)
+
+    true_arr = true.data
+    # 0 * log 0 is 0 by convention, and clamping rather than masking is what keeps the
+    # `log` away from a divide-by-zero warning: the factor in front is already zero.
+    target_entropy = true_arr * np.log(np.maximum(true_arr, EPSILON))
+    # Unnormalized targets are not rejected, so the gradient carries the row sum. It is
+    # 1 for a genuine distribution, which is where the familiar `p - y` comes from.
+    total = np.sum(true_arr, axis=-1, keepdims=True)
+
+    if logits:
+        z = pred.data
+        shifted = z - np.max(z, axis=-1, keepdims=True)
+        log_probabilities = shifted - np.log(
+            np.sum(np.exp(shifted), axis=-1, keepdims=True)
+        )
+        probabilities = np.exp(log_probabilities)
+        per_example = np.sum(target_entropy - true_arr * log_probabilities, axis=-1)
+
+        def backward(upstream: Array) -> Array:
+            return (total * probabilities - true_arr) * upstream[..., np.newaxis]
+    else:
+        p = np.clip(pred.data, EPSILON, 1.0)
+        per_example = np.sum(target_entropy - true_arr * np.log(p), axis=-1)
+
+        def backward(upstream: Array) -> Array:
+            return -true_arr / p * upstream[..., np.newaxis]
+
+    return _reduce(per_example, reduction, pred, backward, "kl_divergence")
+
+
+def hinge(
+    true: Tensor,
+    pred: Tensor,
+    margin: float = 1.0,
+    squared: bool = False,
+    reduction: Reduction = "mean",
+) -> Tensor:
+    """Hinge loss ``max(0, margin - true * pred)``, the loss a linear SVM minimizes.
+
+    Zero once an example is on the right side of the boundary *by the margin*, and
+    linear in the shortfall before that. The consequence is the one worth knowing: an
+    example classified confidently enough contributes no gradient at all, so training
+    is driven only by the points near the boundary. Cross-entropy never stops pushing.
+
+    Parameters
+    ----------
+    true : Tensor
+        Targets in ``{-1, +1}``, same shape as `pred`. Not differentiated.
+    pred : Tensor
+        Raw scores. There is no activation to fuse — the hinge is defined on the
+        decision function itself, and squashing it through a sigmoid first would
+        collapse the margin.
+    margin : float, default 1.0
+        How far past the boundary an example must be before it stops contributing.
+    squared : bool, default False
+        Square the shortfall. Continuously differentiable at the hinge rather than
+        merely continuous, and it weights a badly misclassified example by the square
+        of its margin violation.
+    reduction : Reduction, default "mean"
+        Averaged, summed, or returned per element.
+
+    Returns
+    -------
+    Tensor
+        Scalar unless ``reduction="none"``, in which case it has `pred`'s shape.
+
+    Raises
+    ------
+    ValueError
+        If `margin` is not positive, or if `true` holds anything but -1 and +1. The
+        second is refused rather than converted: `{0, 1}` labels are the common mistake
+        and silently reading a 0 as "-1" would make every negative example look
+        correctly classified by exactly `margin`, which trains and is wrong.
+    """
+    _check_same_shape(true, pred)
+    if margin <= 0:
+        raise ValueError(f"margin must be positive, got {margin}")
+
+    true_arr = true.data
+    if true_arr.size and not np.all(np.abs(true_arr) == 1.0):
+        raise ValueError(
+            "hinge expects targets in {-1, +1}, got values outside it. Convert "
+            "{0, 1} labels with 2 * y - 1."
+        )
+
+    shortfall = margin - true_arr * pred.data
+    violated = shortfall > 0
+    elementwise = np.where(violated, shortfall**2 if squared else shortfall, 0.0)
+
+    def backward(upstream: Array) -> Array:
+        # d/dpred of (margin - true*pred) is -true, and zero once the hinge is
+        # satisfied. The kink at exactly 0 takes the inactive subgradient, matching
+        # `relu`, so an example sitting on the margin contributes nothing.
+        slope = -true_arr * (2.0 * shortfall if squared else 1.0)
+        return np.where(violated, slope, 0.0) * upstream
+
+    return _reduce(elementwise, reduction, pred, backward, "hinge")
 
 
 def huber(

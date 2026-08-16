@@ -28,7 +28,9 @@ from pynn.core.types import Array
 from pynn.functional.losses import (
     binary_crossentropy,
     categorical_crossentropy,
+    hinge,
     huber,
+    kl_divergence,
     mean_absolute_error,
     mean_squared_error,
     sparse_categorical_crossentropy,
@@ -691,6 +693,101 @@ def gradient_cases(seed: int = DEFAULT_SEED) -> list[GradientCase]:
             "loss huber reduction=sum",
             lambda ts: huber(huber_targets, ts[0], delta=1.0, reduction="sum"),
             [Tensor(rng.uniform(0.1, 0.5, (4, 3)))],
+        ),
+    ]
+
+    # KL divergence. It differs from cross-entropy by a constant, so a check that only
+    # looked at the gradient would pass with the entropy term missing entirely; the
+    # cases below therefore include an unnormalized target, where the row sum enters
+    # the gradient and the familiar `p - y` stops being right.
+    kl_targets = Tensor(rng.dirichlet(np.ones(4), 6))
+    unnormalized = Tensor(rng.uniform(0.1, 0.9, (6, 4)))
+    # A target with exact zeros: `0 * log 0` is 0 by convention, and the clamped `log`
+    # has to leave the gradient of those classes at exactly `total * p`.
+    sparse_target = Tensor(np.eye(4)[rng.integers(0, 4, 6)])
+    cases += [
+        (
+            "loss kl divergence from logits",
+            lambda ts: kl_divergence(kl_targets, ts[0]),
+            [normal(6, 4)],
+        ),
+        (
+            "loss kl divergence from probabilities",
+            lambda ts: kl_divergence(kl_targets, ts[0], logits=False),
+            [Tensor(rng.uniform(0.1, 0.9, (6, 4)))],
+        ),
+        (
+            "loss kl divergence with a one-hot target",
+            lambda ts: kl_divergence(sparse_target, ts[0]),
+            [normal(6, 4)],
+        ),
+        (
+            "loss kl divergence with an unnormalized target",
+            lambda ts: kl_divergence(unnormalized, ts[0]),
+            [normal(6, 4)],
+        ),
+        (
+            "loss kl divergence reduction=sum",
+            lambda ts: kl_divergence(kl_targets, ts[0], reduction="sum"),
+            [normal(6, 4)],
+        ),
+        (
+            "loss kl divergence with a reused input",
+            lambda ts: (
+                pmath.sum(kl_divergence(kl_targets, ts[0], reduction="none") * ts[1])
+                + pmath.sum(ts[0] * ts[2])
+            ),
+            [normal(6, 4), normal(6), normal(6, 4)],
+        ),
+    ]
+
+    # Hinge. Scores are kept clear of the margin, where the loss has a kink and a
+    # central difference would straddle both pieces.
+    hinge_labels = Tensor(rng.choice([-1.0, 1.0], (6, 1)))
+
+    def off_margin(*shape: int) -> Tensor:
+        """Scores whose distance from the hinge is at least 0.5, either side of it."""
+        magnitude = rng.uniform(1.5, 3.0, shape)
+        return Tensor(magnitude * rng.choice([-1.0, 1.0], shape))
+
+    cases += [
+        (
+            "loss hinge",
+            lambda ts: hinge(hinge_labels, ts[0]),
+            [off_margin(6, 1)],
+        ),
+        (
+            "loss hinge squared",
+            lambda ts: hinge(hinge_labels, ts[0], squared=True),
+            [off_margin(6, 1)],
+        ),
+        (
+            "loss hinge margin=2",
+            lambda ts: hinge(hinge_labels, ts[0], margin=2.0),
+            [off_margin(6, 1)],
+        ),
+        (
+            "loss hinge reduction=sum",
+            lambda ts: hinge(hinge_labels, ts[0], reduction="sum"),
+            [off_margin(6, 1)],
+        ),
+        (
+            "loss hinge with a reused input",
+            lambda ts: (
+                pmath.sum(hinge(hinge_labels, ts[0], reduction="none") * ts[1])
+                + pmath.sum(ts[0] * ts[2])
+            ),
+            [off_margin(6, 1), normal(6, 1), normal(6, 1)],
+        ),
+        (
+            "loss hinge squared with a reused input",
+            lambda ts: (
+                pmath.sum(
+                    hinge(hinge_labels, ts[0], squared=True, reduction="none") * ts[1]
+                )
+                + pmath.sum(ts[0] * ts[2])
+            ),
+            [off_margin(6, 1), normal(6, 1), normal(6, 1)],
         ),
     ]
 

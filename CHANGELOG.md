@@ -10,6 +10,22 @@ While the major version is 0, the public API may change between minor versions.
 
 ### Added
 
+- **`KLDivLoss` and `HingeLoss`**, both through the shared `_reduce` helper so the three
+  reduction modes cannot drift apart. KL divergence differs from cross-entropy only by
+  the target's own entropy, so the two have *identical gradients* — the value is what
+  distinguishes them, reading zero at a perfect fit rather than at the entropy of the
+  labels, which is what makes it the loss for distillation. It fuses `log_softmax` in
+  where PyTorch's requires the caller to have applied it, and its `reduction="mean"` is
+  PyTorch's `"batchmean"`, since the sum over classes is the definition rather than a
+  reduction. Checked against `torch.nn.KLDivLoss` in the external suite. `HingeLoss` is
+  the SVM objective, `max(0, margin - true * pred)`, with a squared variant; it refuses
+  `{0, 1}` targets and names the `2 * y - 1` conversion, because reading a 0 as -1
+  would make every negative example look correctly classified by exactly the margin and
+  would train. Twelve gradcheck entries between them, including reused-input variants
+  and an unnormalized KL target, where the row sum enters the gradient and the familiar
+  `p - y` stops being right. Four stability checks: KL at a zero target and extreme
+  logits, where both `y log y` and `log_softmax` can reach `nan`, and the hinge at
+  scores of 1e300 either side of the margin.
 - **`Unflatten`, the inverse of `Flatten`**, as a layer and as `pynn.functional.unflatten`.
   It takes the trailing shape of one *example* — `Unflatten(2, 5, 5)` maps `(batch, 50)`
   to `(batch, 2, 5, 5)` — and reads the batch size from the input, with one axis

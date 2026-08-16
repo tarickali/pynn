@@ -14,6 +14,8 @@ from pynn.core import Tensor
 from pynn.functional.losses import (
     binary_crossentropy,
     categorical_crossentropy,
+    hinge,
+    kl_divergence,
     mean_absolute_error,
     mean_squared_error,
 )
@@ -23,7 +25,9 @@ from pynn.nn import (
     BinaryCrossentropy,
     CategoricalCrossentropy,
     CrossEntropyLoss,
+    HingeLoss,
     HuberLoss,
+    KLDivLoss,
     L1Loss,
     MeanAbsoluteError,
     MeanSquaredError,
@@ -405,3 +409,186 @@ def test_sparse_rejects_a_non_matrix_prediction(rng):
         SparseCategoricalCrossentropy()(
             np.array([0, 1]), Tensor(rng.standard_normal((2, 3, 4)))
         )
+
+
+# --------------------------------------------------------------------------- #
+# KL divergence
+#
+# It differs from cross-entropy by the target's own entropy, which does not depend on
+# `pred`. So the two have identical *gradients*, and a check on the gradient alone
+# would pass with the entropy term dropped entirely. What distinguishes them is the
+# value: KL(p || p) is zero, and cross-entropy at a perfect fit is H(p).
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def distributions(rng):
+    """A target distribution and logits, both over four classes."""
+    return Tensor(rng.dirichlet(np.ones(4), 6)), Tensor(rng.standard_normal((6, 4)))
+
+
+def test_kl_divergence_is_zero_for_a_perfect_prediction(distributions):
+    true, _ = distributions
+
+    # Logits whose softmax is exactly `true`, up to the shift softmax is invariant to.
+    matching = Tensor(np.log(true.data))
+
+    assert KLDivLoss()(true, matching).data == pytest.approx(0.0, abs=1e-12)
+
+
+def test_kl_divergence_is_never_negative(distributions):
+    true, logits = distributions
+    assert float(KLDivLoss()(true, logits).data) > 0.0
+
+
+def test_kl_divergence_matches_the_closed_form(distributions):
+    true, logits = distributions
+
+    shifted = logits.data - logits.data.max(axis=-1, keepdims=True)
+    log_p = shifted - np.log(np.exp(shifted).sum(axis=-1, keepdims=True))
+    expected = (true.data * (np.log(true.data) - log_p)).sum(axis=-1).mean()
+
+    assert KLDivLoss()(true, logits).data == pytest.approx(expected)
+
+
+def test_kl_divergence_and_cross_entropy_differ_by_a_constant(distributions):
+    """Why they train identically, and why only the value tells them apart."""
+    true, logits = distributions
+
+    kl = float(KLDivLoss()(true, logits).data)
+    ce = float(CategoricalCrossentropy()(true, logits).data)
+    entropy = -(true.data * np.log(true.data)).sum(axis=-1).mean()
+
+    assert kl == pytest.approx(ce - entropy)
+
+
+def test_kl_divergence_gradient_matches_cross_entropy(distributions):
+    true, logits = distributions
+
+    divergence = Tensor(logits.data.copy())
+    KLDivLoss()(true, divergence).backward()
+
+    entropy = Tensor(logits.data.copy())
+    CategoricalCrossentropy()(true, entropy).backward()
+
+    assert np.allclose(divergence.grad, entropy.grad)
+
+
+def test_kl_divergence_mean_averages_over_examples_not_classes(distributions):
+    """PyTorch calls this `batchmean`; its own `mean` is not a KL divergence."""
+    true, logits = distributions
+
+    per_example = KLDivLoss(reduction="none")(true, logits)
+    averaged = KLDivLoss(reduction="mean")(true, logits)
+
+    assert per_example.shape == (6,)
+    assert float(averaged.data) == pytest.approx(float(per_example.data.mean()))
+
+
+def test_kl_divergence_treats_a_zero_target_as_contributing_nothing():
+    """`0 * log 0` is 0 by convention; evaluated literally it is `nan`."""
+    true = Tensor(np.array([[1.0, 0.0, 0.0]]))
+    logits = Tensor(np.array([[2.0, 1.0, -1.0]]))
+
+    loss = KLDivLoss()(true, logits)
+    loss.backward()
+
+    assert np.isfinite(loss.data).all()
+    assert np.isfinite(logits.grad).all()
+
+
+@pytest.mark.parametrize("logits", [True, False])
+def test_kl_divergence_forwards_the_logits_flag(distributions, logits):
+    true, raw = distributions
+    pred = raw if logits else F.softmax(raw)
+
+    assert np.allclose(
+        KLDivLoss(logits=logits)(true, pred).data,
+        kl_divergence(true, pred, logits).data,
+    )
+
+
+def test_kl_divergence_agrees_across_its_two_input_forms(distributions):
+    true, raw = distributions
+
+    fused = KLDivLoss(logits=True)(true, raw)
+    explicit = KLDivLoss(logits=False)(true, F.softmax(raw))
+
+    assert np.allclose(fused.data, explicit.data)
+
+
+# --------------------------------------------------------------------------- #
+# Hinge
+# --------------------------------------------------------------------------- #
+
+
+def test_hinge_is_zero_past_the_margin():
+    true = Tensor(np.array([[1.0], [-1.0]]))
+    pred = Tensor(np.array([[3.0], [-3.0]]))
+
+    assert float(HingeLoss(reduction="sum")(true, pred).data) == 0.0
+
+
+def test_hinge_matches_the_closed_form(rng):
+    true = Tensor(rng.choice([-1.0, 1.0], (6, 1)))
+    pred = Tensor(rng.standard_normal((6, 1)))
+
+    expected = np.maximum(0.0, 1.0 - true.data * pred.data).mean()
+
+    assert HingeLoss()(true, pred).data == pytest.approx(expected)
+
+
+def test_hinge_squared_matches_the_closed_form(rng):
+    true = Tensor(rng.choice([-1.0, 1.0], (6, 1)))
+    pred = Tensor(rng.standard_normal((6, 1)))
+
+    expected = (np.maximum(0.0, 1.0 - true.data * pred.data) ** 2).mean()
+
+    assert HingeLoss(squared=True)(true, pred).data == pytest.approx(expected)
+
+
+def test_hinge_forwards_the_margin():
+    true = Tensor(np.array([[1.0]]))
+    pred = Tensor(np.array([[1.5]]))
+
+    assert float(HingeLoss(margin=1.0)(true, pred).data) == 0.0
+    assert float(HingeLoss(margin=2.0)(true, pred).data) == pytest.approx(0.5)
+
+
+def test_a_satisfied_example_contributes_no_gradient():
+    """The sparsity that "support vector" names: only the near-boundary points push."""
+    true = Tensor(np.array([[1.0], [1.0]]))
+    pred = Tensor(np.array([[5.0], [0.2]]))
+
+    HingeLoss(reduction="sum")(true, pred).backward()
+
+    assert pred.grad[0, 0] == 0.0
+    assert pred.grad[1, 0] == -1.0
+
+
+def test_hinge_refuses_zero_one_labels_and_names_the_conversion():
+    """Reading a 0 as -1 would make every negative look right by exactly the margin."""
+    true = Tensor(np.array([[0.0], [1.0]]))
+    pred = Tensor(np.array([[0.5], [0.5]]))
+
+    with pytest.raises(ValueError, match=r"2 \* y - 1"):
+        HingeLoss()(true, pred)
+
+
+def test_hinge_rejects_a_non_positive_margin():
+    true = Tensor(np.array([[1.0]]))
+    pred = Tensor(np.array([[0.5]]))
+
+    with pytest.raises(ValueError, match="margin must be positive"):
+        HingeLoss(margin=0.0)(true, pred)
+
+
+@pytest.mark.parametrize("reduction", ["mean", "sum", "none"])
+def test_hinge_forwards_the_reduction(rng, reduction):
+    true = Tensor(rng.choice([-1.0, 1.0], (6, 1)))
+    pred = Tensor(rng.standard_normal((6, 1)))
+
+    assert np.allclose(
+        HingeLoss(reduction=reduction)(true, pred).data,
+        hinge(true, pred, reduction=reduction).data,
+    )

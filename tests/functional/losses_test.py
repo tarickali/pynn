@@ -151,3 +151,35 @@ def test_multi_loss_from_probabilities():
         (ptensor_b, torch_b),
     ]:
         assert np.allclose(ptensor.grad, tensor.grad.numpy(), atol=1e-6)
+
+
+def test_kl_divergence_matches_torch():
+    """Against `batchmean`, which is the reduction that is actually a KL divergence.
+
+    PyTorch's `KLDivLoss` also takes log-probabilities where this one takes logits and
+    fuses the `log_softmax` in, so the call sites differ on purpose — the values and
+    the gradients they produce must not.
+    """
+    (
+        (ptensor_x, ptensor_W, ptensor_b, ptensor_z),
+        (torch_x, torch_W, torch_b, torch_z),
+        _,
+    ) = get_data(32, 10, seed=5)
+
+    y = np.random.default_rng(5).dirichlet(np.ones(10), 32)
+
+    ptensor_loss = L.KLDivLoss(logits=True)(Tensor(y), ptensor_z)
+    ptensor_loss.backward()
+
+    torch_loss = torch.nn.KLDivLoss(reduction="batchmean")(
+        G.log_softmax(torch_z, dim=-1), torch.Tensor(y)
+    )
+    torch_loss.backward()
+
+    assert np.allclose(ptensor_loss.data, torch_loss.detach().numpy(), atol=1e-6)
+    for ptensor, tensor in [
+        (ptensor_W, torch_W),
+        (ptensor_x, torch_x),
+        (ptensor_b, torch_b),
+    ]:
+        assert np.allclose(ptensor.grad, tensor.grad.numpy(), atol=1e-6)
