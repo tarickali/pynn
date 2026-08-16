@@ -37,6 +37,45 @@ Each is small and independent; this is the pile to draw from when time is short.
 | Schedules | `ReduceLROnPlateau`, `OneCycleLR`, warmup |
 | Layers | `ConvTranspose2d` (enables an autoencoder example), `Unflatten` as the inverse of `Flatten`, `Identity` as a layer |
 | Metrics | a `pynn.metrics` module: accuracy, precision / recall / F1, confusion matrix, MSE / MAE / R² |
+| Ops | `index_update`, the differentiable write — the one below with an argument behind it |
+
+**`index_update` closes the indexing family.** Reading is differentiable: `x[key]`
+gathers, and its reverse scatters the gradient back into the positions it read from.
+There is no differentiable write to match it, and `__setitem__` deliberately is not one
+— it mutates, and mutating a Tensor an operation already read corrupts that operation's
+reverse pass (`docs/DESIGN.md` §14). The functional form has no such problem, because it
+produces a new Tensor and leaves the original alone. JAX spells it `x.at[key].set(v)`:
+
+```python
+updated = index_update(x, key, value)   # a copy of x, with x[key] replaced
+```
+
+The reverse is a genuine scatter: `output.grad` with the written positions zeroed goes
+to `x`, and `output.grad` gathered at those positions, unbroadcast, goes to `value`.
+`where` and `masked_fill` already cover the mask-shaped cases, but neither expresses an
+advanced-index write — `x[[1, 4, 7]] = v` needs a full-shape boolean mask to fake, and
+duplicate indices have no meaning in that spelling at all.
+
+Gradcheck entries: a basic slice, an advanced index, **duplicate indices** — where a
+reverse that assigns instead of accumulating shows up — and a reused-input variant where
+`x` also feeds a second consumer.
+
+**Do the companion guard in the same change.** Assigning a *computed* Tensor into a
+buffer is the way anyone coming from NumPy writes an unrolled loop:
+
+```python
+buffer = Tensor(np.zeros((batch, window, hidden)))
+for t in range(window):
+    buffer[:, t] = cell(...)        # accepted today
+```
+
+The assignment is not recorded, so nothing upstream of `cell` receives any gradient at
+all — measured at exactly 0.0, with no error anywhere. It is the same failure
+`__getitem__` used to have, and it is a likelier mistake than the mutation the current
+guard catches. `Tensor.__setitem__` already refuses a computed *target*; refusing a
+computed *value* is the same check on the other operand. Assigning a leaf Tensor stays
+legal, since filling a buffer from data is what the escape hatch is for. The error
+should name `stack`, which is what the caller wanted, and `index_update` once it exists.
 
 ### 3. Further acceleration, in measured order
 
