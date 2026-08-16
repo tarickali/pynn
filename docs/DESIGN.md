@@ -621,6 +621,19 @@ on raw arrays with a hand-written reverse rather than composing `where`. That is
 deliberate. A fused reverse for a condition known at write time is one pass; composing
 would allocate both branches and route a gradient through each.
 
+`__setitem__` is the one indexing operation deliberately *off* the tape. Reading is
+differentiable; writing is not, and is refused outright on any Tensor an operation
+produced. The reason is a detail of how closures capture: a reverse closure reads its
+inputs' `data` when it **runs**, not when it was built, so mutating a node after the
+forward pass takes the gradient at values the forward pass never saw — right shapes,
+no error, wrong number. The refusal is not a complete guard, and the docstring says so:
+a leaf that has already been consumed is indistinguishable from a fresh one, because a
+Tensor knows its children and not its consumers. Closing that gap means a version
+counter on every Tensor and a stamp in every closure, checked during the reverse pass.
+That is PyTorch's answer, and it is more machinery than this library should carry for
+an operation that already has a differentiable spelling: `where`, `masked_fill`, and
+`concat` are how you produce a tensor with some positions replaced.
+
 ### What this unblocked
 
 A recurrent cell applies **the same weights at every timestep**. Unrolled over 30 steps,

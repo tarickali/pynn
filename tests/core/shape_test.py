@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 
 import pynn.core.math as pmath
-from pynn.core import Tensor, concat, masked_fill, split, stack, where
+from pynn.core import Tensor, concat, masked_fill, no_grad, split, stack, where
 
 
 @pytest.fixture
@@ -106,6 +106,30 @@ def test_setitem_assigns_without_recording(x):
 
     x[1] = Tensor(np.ones(4))
     assert x.data[1].tolist() == [1.0] * 4
+
+
+def test_setitem_refuses_a_computed_tensor(x):
+    """A reverse closure reads its inputs when it runs, not when it was built.
+
+    Mutating a node the tape produced leaves the closure reading data that no longer
+    matches what it recorded, and no gradient check can see it — the shapes are right
+    and the arithmetic runs. Refused at the assignment instead.
+    """
+    computed = x * 2.0
+
+    with pytest.raises(RuntimeError, match="in-place assignment"):
+        computed[0] = np.zeros(4)
+
+    assert computed.data[0].tolist() == [0.0, 2.0, 4.0, 6.0]
+
+
+def test_setitem_allows_a_tensor_built_under_no_grad(x):
+    """No tape, nothing to invalidate — and it reads as a leaf, because it is one."""
+    with no_grad():
+        computed = x * 2.0
+
+    computed[0] = np.zeros(4)
+    assert computed.data[0].tolist() == [0.0] * 4
 
 
 # --------------------------------------------------------------------------- #

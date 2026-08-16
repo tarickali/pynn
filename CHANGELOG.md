@@ -60,6 +60,18 @@ While the major version is 0, the public API may change between minor versions.
 
 ### Changed
 
+- **`Tensor.__setitem__` refuses a Tensor an operation produced.** In-place assignment
+  was already documented as non-differentiable and not recorded, but the guard was a
+  docstring. A reverse closure reads its inputs' `data` when it runs rather than when
+  it was built, so mutating a node after the forward pass takes the gradient at values
+  that pass never saw — correct shapes, no error, wrong number. It now raises
+  `RuntimeError` naming the operation that produced the Tensor and pointing at `where`,
+  `masked_fill`, and `concat`, which are the differentiable spellings. Filling a leaf —
+  an input buffer or a parameter — is unaffected, as is assignment into a Tensor built
+  under `no_grad`, which has no tape to invalidate. The guard is deliberately partial:
+  a leaf that has already been consumed looks exactly like a fresh one, since a Tensor
+  knows its children and not its consumers, and catching that would need a version
+  counter on every Tensor and a stamp in every closure.
 - **`examples/char_rnn.ipynb` calls `loss.free_graph()`** where it used to call
   `gc.collect()` every fourth step, and the paragraph explaining the cadence is now a
   paragraph explaining the call. Collecting *on top* of `free_graph` measures 82.1

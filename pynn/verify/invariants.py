@@ -117,6 +117,18 @@ def check_autodiff() -> CheckReport:
             f"raised {type(error).__name__}: {error}",
         )
 
+    # Assignment is the escape hatch for filling a buffer, and must not reach a node
+    # the tape produced: a reverse closure reads its inputs when it runs rather than
+    # when it was built, so the gradient would be taken at data the forward pass never
+    # saw, with correct shapes and no error anywhere.
+    try:
+        (Tensor(np.ones((2, 2))) * 2.0)[0] = np.zeros(2)
+        report.add(
+            "assignment into a computed Tensor is refused", False, "no error raised"
+        )
+    except RuntimeError:
+        report.add("assignment into a computed Tensor is refused", True)
+
     indexed = Tensor(np.arange(6.0).reshape(3, 2))
     pmath.sum(indexed[[0, 0, 2]]).backward()
     report.add(

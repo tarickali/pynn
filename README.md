@@ -214,7 +214,7 @@ pip install -e ".[hooks]" && pre-commit install
 Every push and pull request to `main` runs the same checks across Python
 3.10–3.14 on GitHub Actions: `ruff check`, `ruff format --check`, `mypy`,
 `pytest -m "not external" --cov=pynn`, and `python -m pynn.verify`. Coverage is held
-to a **95% floor** (`fail_under` in `[tool.coverage.report]`), currently at 98.4%, so
+to a **95% floor** (`fail_under` in `[tool.coverage.report]`), currently at 98.3%, so
 it cannot regress silently. The workflow lives at
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
@@ -262,10 +262,10 @@ python -m pynn.verify stability    # one suite
 
 ```
 gradients: 209/209 passed (OK)
-invariants: 112/112 passed (OK)
+invariants: 113/113 passed (OK)
 stability: 24/24 passed (OK)
 
-pynn.verify: 345/345 passed (OK)
+pynn.verify: 346/346 passed (OK)
 ```
 
 Three suites:

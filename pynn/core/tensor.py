@@ -412,9 +412,34 @@ class Tensor:
 
         Deliberately *not* differentiable, and not recorded: the tape holds the
         operations that produced a value, and overwriting part of one afterwards would
-        invalidate a node other tensors may already depend on. Use it to fill an input
-        buffer, not inside a model.
+        invalidate a node other tensors may already depend on. This is the escape hatch
+        for filling a buffer. `where`, `masked_fill`, and `concat` are the
+        differentiable spellings of "a Tensor with these positions replaced".
+
+        Assigning into a Tensor an operation *produced* is refused, since a reverse
+        closure reads its inputs' data when it runs rather than when it was built, and
+        nothing would report the mismatch. The refusal is not complete: a leaf that has
+        already been consumed by an operation looks exactly like one that has not, and
+        a Tensor knows its children but not its consumers. Catching that case too would
+        mean a version counter on every Tensor and a stamp in every reverse closure,
+        which is PyTorch's answer and more machinery than this library carries.
+
+        Raises
+        ------
+        RuntimeError
+            If this Tensor was computed by an operation while recording was on.
         """
+        # Recording off means no tape to invalidate, and a Tensor built under
+        # `no_grad` has no children — so this reads as a leaf and is allowed.
+        if self.children:
+            raise RuntimeError(
+                f"in-place assignment into a Tensor produced by {self.forward!r}. The "
+                "tape already records what it was computed from, so the reverse pass "
+                "would read data that no longer matches, and nothing would say so. "
+                "Assign into a leaf — an input buffer or a parameter — or build a new "
+                "Tensor with where(), masked_fill(), or concat(), which stay on the "
+                "tape."
+            )
         self.data[key] = value.data if isinstance(value, Tensor) else value
 
     def reshape(self, *shape: int | tuple[int, ...]) -> Tensor:

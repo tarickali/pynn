@@ -68,7 +68,7 @@ pip install -e ".[hooks]"      # pre-commit — see section 3
 ```bash
 python -c "import pynn; print(pynn.__file__)"       # works from any directory
 python -c "import pynn; print(pynn.__version__)"    # 0.1.0
-python -m pynn.verify                               # 345/345 passed (OK)
+python -m pynn.verify                               # 346/346 passed (OK)
 ```
 
 `requirements-dev.txt` installs the library in editable mode, so `pynn` imports from
@@ -85,9 +85,9 @@ pytest --cov=pynn                   # + coverage, enforces the 95% floor
 pytest --cov=pynn --cov-report=term-missing   # + which lines are uncovered
 ```
 
-**Expected:** `820 passed, 1 skipped, 6 deselected` · `Total coverage: ~98.4%`
+**Expected:** `822 passed, 1 skipped, 6 deselected` · `Total coverage: ~98.3%`
 
-On Python 3.10 it is `818 passed, 3 skipped`: two of the packaging checks parse
+On Python 3.10 it is `820 passed, 3 skipped`: two of the packaging checks parse
 `pyproject.toml`, and `tomllib` is standard library only from 3.11.
 
 Narrower runs:
@@ -125,10 +125,10 @@ python -m pynn.verify stability invariants  # several
 
 ```
 gradients: 209/209 passed (OK)
-invariants: 112/112 passed (OK)
+invariants: 113/113 passed (OK)
 stability: 24/24 passed (OK)
 
-pynn.verify: 345/345 passed (OK)
+pynn.verify: 346/346 passed (OK)
 ```
 
 Exit code is 0 on success, 1 on any failure, so it works as a CI gate.
