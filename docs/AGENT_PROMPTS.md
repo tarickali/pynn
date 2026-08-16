@@ -84,8 +84,8 @@ Every prompt below already includes this. It is repeated here so it can be edite
 > `PROJECT_REVIEW.md` is a historical record of two review passes — read it for context,
 > but `TASKS.md` is the live queue.
 >
-> **State of the repo.** Green on Python 3.10–3.14: 822 tests, 346 checks from
-> `python -m pynn.verify` (209 of them numerical gradient checks), 98.3% line coverage
+> **State of the repo.** Green on Python 3.10–3.14: 980 tests, 415 checks from
+> `python -m pynn.verify` (226 of them numerical gradient checks), 98.5% line coverage
 > with a 95% floor enforced in CI. `ruff` and `mypy` are clean across `pynn tests
 > examples scripts benchmarks`, including the code cells of both notebooks.
 > `pre-commit run --all-files` is clean too, and `ruff` and `mypy` are pinned exactly —

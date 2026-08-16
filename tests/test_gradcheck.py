@@ -3,7 +3,7 @@
 The bulk of this file is a single parametrization over `pynn.verify.gradient_cases`,
 which is the same sweep `python -m pynn.verify` runs. Driving it from pytest gives one
 test per operation, so a failure names the op instead of reporting one failure for a
-132-case sweep. The sweep is the single source of truth for *which* operations are
+226-case sweep. The sweep is the single source of truth for *which* operations are
 covered; keeping a parallel hand-written list here meant the two could drift, and they
 did — the sweep checks each op both alone and with its input reused, while the
 hand-written tests only ever used a single consumer.
@@ -48,7 +48,7 @@ def test_sweep_covers_every_operation() -> None:
     a case does not fail the suite, but deleting a block of them does.
     """
     names = {case.name for case in gradient_cases()}
-    assert len(names) >= 165, f"sweep shrank to {len(names)} cases"
+    assert len(names) >= 220, f"sweep shrank to {len(names)} cases"
 
     for expected in [
         "add",
@@ -66,13 +66,16 @@ def test_sweep_covers_every_operation() -> None:
         "silu",
         "log softmax",
         "prelu",
+        "unflatten",
+        "loss kl divergence",
+        "loss hinge",
     ]:
         assert any(expected in name for name in names), f"no {expected!r} case"
 
     # Every unary and binary op must appear in its reused-input form too; that is the
     # variant that catches missing gradient accumulation.
     reused = [name for name in names if "reused" in name]
-    assert len(reused) >= 25, f"only {len(reused)} reuse cases"
+    assert len(reused) >= 50, f"only {len(reused)} reuse cases"
 
 
 @pytest.mark.parametrize("seed", [1, 7, 3, 11])

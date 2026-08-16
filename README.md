@@ -8,7 +8,7 @@
 **PyNN** is a small, NumPy-based neural network library with automatic differentiation. It provides a PyTorch-like API for building and training feedforward and convolutional models from scratch, with no dependency on PyTorch or TensorFlow.
 
 Every differentiable operation is checked against central-difference numerical gradients
-— 209 checks, including branching graph topologies — and the design decisions behind the
+— 226 checks, including branching graph topologies — and the design decisions behind the
 tape are written up in [`docs/DESIGN.md`](docs/DESIGN.md).
 
 ![The computation graph of a two-layer MLP and a squared-error loss](docs/tape.svg)
@@ -214,7 +214,7 @@ pip install -e ".[hooks]" && pre-commit install
 Every push and pull request to `main` runs the same checks across Python
 3.10–3.14 on GitHub Actions: `ruff check`, `ruff format --check`, `mypy`,
 `pytest -m "not external" --cov=pynn`, and `python -m pynn.verify`. Coverage is held
-to a **95% floor** (`fail_under` in `[tool.coverage.report]`), currently at 98.3%, so
+to a **95% floor** (`fail_under` in `[tool.coverage.report]`), currently at 98.5%, so
 it cannot regress silently. The workflow lives at
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
@@ -261,11 +261,11 @@ python -m pynn.verify stability    # one suite
 ```
 
 ```
-gradients: 209/209 passed (OK)
-invariants: 113/113 passed (OK)
-stability: 24/24 passed (OK)
+gradients: 226/226 passed (OK)
+invariants: 161/161 passed (OK)
+stability: 28/28 passed (OK)
 
-pynn.verify: 346/346 passed (OK)
+pynn.verify: 415/415 passed (OK)
 ```
 
 Three suites:
