@@ -36,6 +36,39 @@ review pass: C turned up the reference cycle on its way through writing the note
 and that finding took the `TASKS.md` slot the example domain had vacated. **B is the
 only package left.**
 
+### What E left behind
+
+Worth recording, because it is a pattern rather than an accident: **E's brief was one
+paragraph of `TASKS.md` and it closed three items' worth of ground.** The prompt asked
+for a memory fix. Reviewing what the fix now refuses, and then auditing where the
+library diverges from what a PyTorch user would expect, turned up more than the fix
+itself did.
+
+Shipped beyond the brief:
+
+- **`Tensor.__setitem__` refuses a Tensor an operation produced.** In-place assignment
+  was documented as non-differentiable, but the guard was a docstring, and a reverse
+  closure that reads its inputs' `data` when it runs takes the gradient at values the
+  forward pass never saw. Loud now, with the residual hole stated in the docstring,
+  `docs/DESIGN.md` §14, and `CHANGELOG.md` rather than left to be discovered.
+- **`docs/DESIGN.md` §11's check counts**, which had said 151 and "nine graph
+  topologies" since before the recurrent cells landed. 209 and eight.
+
+Queued rather than built, each with its measurements in `TASKS.md`:
+
+- **Item 4** — a second `backward` over one graph compounds instead of doubling, and
+  the overshoot grows with depth. Found by asking what the call `free_graph` refuses
+  would have done. Pinned by a test that asserts the wrong numbers so they cannot drift
+  while the decision is open.
+- **Item 5** — a float32 path. The tape already preserves float32; the initializers and
+  scalar promotion do not.
+- **Item 2's `index_update`** and its companion guard, from following the `__setitem__`
+  question to the case the guard does not catch.
+
+The lesson for whoever writes the next prompt: **the brief is a floor.** Three of these
+came from asking what a change makes *newly* possible to get wrong, which is a question
+worth asking on purpose rather than stumbling into.
+
 ---
 
 ## Shared preamble
