@@ -49,7 +49,8 @@ While the major version is 0, the public API may change between minor versions.
   `p - y` stops being right. Four stability checks: KL at a zero target and extreme
   logits, where both `y log y` and `log_softmax` can reach `nan`, and the hinge at
   scores of 1e300 either side of the margin.
-- **`Unflatten`, the inverse of `Flatten`**, as a layer and as `pynn.functional.unflatten`.
+- **`Unflatten`, the inverse of `Flatten`**, as a layer and as
+  `pynn.functional.modules.unflatten`.
   It takes the trailing shape of one *example* — `Unflatten(2, 5, 5)` maps `(batch, 50)`
   to `(batch, 2, 5, 5)` — and reads the batch size from the input, with one axis
   allowed to be `-1`. Deliberately narrower than a `Reshape` layer, which this library
