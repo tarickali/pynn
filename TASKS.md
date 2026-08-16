@@ -1,7 +1,7 @@
 # TASKS
 
 Work that is queued but not scheduled. The library is green on Python 3.10–3.14 with
-980 tests, 415 verification checks, and 98% coverage.
+982 tests, 415 verification checks, and 98% coverage.
 
 Everything structural is done — the last item of that kind, differentiable indexing, is
 what unblocked the recurrent cells — and so is everything in the packaging and process
