@@ -5,9 +5,11 @@ Work that is queued but not scheduled. The library is green on Python 3.10–3.1
 
 Everything structural is done — the last item of that kind, differentiable indexing, is
 what unblocked the recurrent cells — and so is everything in the packaging and process
-section that used to lead this file. Items 1-5 are independent and can be picked up in
+section that used to lead this file. Items 2-5 are independent and can be picked up in
 any order or dropped; the sequence-modelling section at the end is a dependency chain,
-and is future work rather than queued work.
+and is future work rather than queued work. Finished items move to the bottom **without
+renumbering what is left**, since `docs/DESIGN.md` and `tests/core/tensor_test.py` cite
+them by number.
 
 **Item 4 is the exception to "nice to have".** It is the one thing here that produces a
 wrong number rather than a missing feature. It is confined to an operation the library
@@ -18,12 +20,6 @@ failure mode this codebase is otherwise built to avoid.
 ---
 
 ## Nice to have
-
-### 1. Property-based tests over `unbroadcast`
-
-Hypothesis over shapes and dtypes. That function is fiddly enough — two reduction rules
-that have to compose correctly — to deserve generated cases rather than a hand-written
-list.
 
 ### 2. More layers, losses, and optimizers
 
@@ -371,3 +367,10 @@ Recorded so this file does not re-propose them. Details in `PROJECT_REVIEW.md` P
   versions
 - A Graphviz dump of the tape: `pynn.viz.to_dot`, with `Tensor.to_dot` as a facade, and
   the figure it generates at the top of the README
+- **Item 1**, property-based tests over `unbroadcast` and `matrix_multiply_gradients`.
+  Hypothesis generates the shape pairs; the properties are the two adjoint identities
+  rather than shape assertions, since a gradient of ones survives summing the wrong
+  axis and a squeeze that should have been a sum still produces the right shape.
+  Mutation-checked against the hand-written list they sit beside: transposing the wrong
+  operand inside `matrix_multiply_gradients` passes every parametrized case and fails
+  the property

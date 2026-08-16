@@ -10,6 +10,20 @@ While the major version is 0, the public API may change between minor versions.
 
 ### Added
 
+- **Property-based tests over `unbroadcast` and `matrix_multiply_gradients`**, the two
+  functions every gradient in the library is routed through. Hypothesis generates
+  broadcast-compatible shape pairs and valid matmul operand shapes rather than the
+  hand-written list that was there before, and the properties are the two adjoint
+  identities: `<broadcast_to(x), g> == <x, unbroadcast(g)>`, and
+  `<A @ B, G> == <A, dA> == <B, dB>`. The adjoint is what makes them worth having over
+  a shape assertion — a gradient of all ones is invariant under summing the *wrong*
+  axis, and a squeeze that should have been a sum produces an array of exactly the
+  right shape. Mutation-checked: transposing the wrong operand in
+  `matrix_multiply_gradients` is caught only by the property, and passes the entire
+  parametrized list. `hypothesis` joins the `dev` extra, configured `derandomize=True`
+  so the examples explored are a function of the commit rather than of the clock —
+  otherwise the five interpreters in the CI matrix each roll their own dice on every
+  push.
 - **`Tensor.free_graph()`.** Releases the tape behind a Tensor by clearing each node's
   `children` and `reverse` over the order `backward` walks. Every Tensor holds its
   reverse pass as a closure that references the Tensor it belongs to, so a finished

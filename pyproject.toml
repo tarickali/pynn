@@ -39,14 +39,17 @@ dependencies = [
 # `.pre-commit-config.yaml` pins its hook revisions to the same two versions so a local
 # commit and a CI run cannot disagree.
 #
-# pytest stays a floor: a version that breaks something fails loudly, names the test,
-# and does not silently rewrite the tree.
+# pytest and hypothesis stay floors: a version that breaks something fails loudly,
+# names the test, and does not silently rewrite the tree. The property tests run
+# `derandomize=True`, so a new hypothesis cannot change which examples they explore
+# either — see tests/core/utils_test.py.
 #
 # numpy is deliberately *not* pinned anywhere. It is a runtime dependency, and the CI
 # matrix tests against whichever version each interpreter supports on purpose.
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
+    "hypothesis>=6.100",
     "ruff==0.16.1",
     "mypy==2.3.0",
 ]
