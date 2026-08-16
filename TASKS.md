@@ -1,17 +1,19 @@
 # TASKS
 
-Work that is queued but not scheduled. Nothing here is a correctness bug — the library
-is green on Python 3.10–3.14 with 816 tests, 345 verification checks, and 98% coverage.
+Work that is queued but not scheduled. The library is green on Python 3.10–3.14 with
+820 tests, 345 verification checks, and 98% coverage.
 
 Everything structural is done — the last item of that kind, differentiable indexing, is
 what unblocked the recurrent cells — and so is everything in the packaging and process
-section that used to lead this file. Items 1-3 are independent and can be picked up in
+section that used to lead this file. Items 1-4 are independent and can be picked up in
 any order or dropped; the sequence-modelling section at the end is a dependency chain,
 and is future work rather than queued work.
 
-Nothing left here has cost anything yet. The one item that had — reclaiming the tape a
-finished graph leaves behind, which `examples/char_rnn.ipynb` was working around with a
-`gc.collect()` cadence — is `Tensor.free_graph()` now, and is recorded at the bottom.
+**Item 4 is the exception to "nice to have".** It is the one thing here that produces a
+wrong number rather than a missing feature. It is confined to an operation the library
+does not support and PyTorch refuses by default, and `Tensor.free_graph()` now makes it
+unreachable on any graph the caller frees — but it is wrong quietly, which is the
+failure mode this codebase is otherwise built to avoid.
 
 ---
 
@@ -83,6 +85,57 @@ memory movement with no arithmetic, where NumPy's copy is already a tuned memcpy
 is no interpreter overhead to remove. Better addressed by avoiding the transpose than by
 compiling the copy.
 
+### 4. A second `backward` over one graph compounds
+
+Found while writing up `free_graph`, by asking what the call it refuses would have done.
+
+Every Tensor carries a `grad`, intermediates included, and every reverse closure reads
+its output's **stored** gradient rather than a value handed to it. So a second pass over
+one finished graph finds the first pass's gradients still sitting on every intermediate
+and propagates them again. It does not double. It compounds, and the overshoot grows
+linearly with depth:
+
+| chain depth | one pass | two passes | should be |
+| --- | --- | --- | --- |
+| 1 | 3.0 | 12.0 | 6.0 |
+| 2 | 9.0 | 45.0 | 18.0 |
+| 4 | 81.0 | 567.0 | 162.0 |
+
+PyTorch stores gradients **on leaves only** — an intermediate's `.grad` is `None`, and
+accessing it warns you it always will be. Its gradients are transient values passed
+between `grad_fn` nodes, so a second pass recomputes them from a clean seed and doubles
+exactly. Its default refuses the second pass anyway: *"Trying to backward through the
+graph a second time"*. `retain_graph=True` is the opt-in.
+
+Scope, so this is not read as worse than it is. Gradient accumulation over
+micro-batches — separate forward passes over the same leaves, no `zero_grad` between
+them — is **correct** and is what the accumulation contract is about; there is an
+invariant and a test for it. What is wrong is re-running one graph, which nothing in
+this repository does and which `free_graph` now refuses outright. The behaviour is
+pinned by `tests/core/tensor_test.py::test_a_second_backward_over_one_graph_compounds`
+so it cannot drift silently, and that test asserts what the library does rather than
+what it should.
+
+Three ways to close it:
+
+- **Zero the non-leaf gradients at the top of `backward`** — `for t in order: if
+  t.children: t.grad = zeros`. Makes a second pass correct and matches PyTorch's
+  semantics. Costs one allocation per node per backward, on the hottest path in the
+  library, to support an operation nobody should be performing. Measure it before
+  committing: the char-RNN graph is 1,234 nodes.
+- **Store gradients on leaves only**, as PyTorch does, and pass intermediates
+  transiently. Correct by construction, and a rewrite of every reverse closure in the
+  library — `x.grad += ...` is the idiom `docs/DESIGN.md` §2 is built around. It would
+  also cost the property that any tensor's gradient is readable without a
+  `retain_grad()` dance, which is worth real money in a library meant to be read.
+- **Make freeing the default** — `backward(retain_graph=False)`, so the wrong answer
+  becomes unreachable rather than merely documented. Cheapest, and the direction
+  `free_graph` was already pointing; the objection to it is weaker now than it was,
+  since nobody can be relying on a result that has never been right.
+
+The third is the recommendation, with the first as a fallback if a real use for
+re-running a graph ever turns up.
+
 ---
 
 ## Sequence modelling
@@ -97,7 +150,7 @@ and gradients flow through a full scaled-dot-product attention built from them. 
 mask is `masked_fill(scores, future, -1e9)` ahead of the softmax, and the filled
 positions come back with exactly zero gradient.
 
-### 4. Fused recurrent layers
+### 5. Fused recurrent layers
 
 `RNNCell`, `LSTMCell`, and a `GRUCell` are the primitives; these are the layers that own
 the loop, so a caller who does not need a custom one does not have to write it.
@@ -140,7 +193,7 @@ the loop, so a caller who does not need a custom one does not have to write it.
   `RNNCell` / `LSTMCell` cases, plus one bidirectional case. An invariant asserting that
   a bidirectional layer's two directions see the sequence in opposite orders.
 
-### 5. Attention
+### 6. Attention
 
 - **`scaled_dot_product_attention(q, k, v, mask=None)`** in `pynn/functional/`:
   `softmax(q @ k.T / sqrt(d)) @ v`. Verified expressible today; the work is the API, the
@@ -156,7 +209,7 @@ the loop, so a caller who does not need a custom one does not have to write it.
   all three of Q, K, and V — self-attention is the case where one input has three
   consumers, which is exactly the shape a reverse pass that overwrites gets wrong.
 
-### 6. Transformer
+### 7. Transformer
 
 - **`TransformerEncoderLayer`**: multi-head self-attention, residual, `LayerNorm`,
   position-wise feed-forward (two `Linear` layers with `GELU` between them), residual,
@@ -182,7 +235,7 @@ because "the autodiff engine is general enough that a transformer is a compositi
 what is already in it, not a rewrite" is a claim worth being able to demonstrate rather
 than assert.
 
-If only part of it is ever built, **item 5 is the one to build**: attention is the
+If only part of it is ever built, **item 6 is the one to build**: attention is the
 single most-asked-about architecture, and it is roughly a hundred lines on top of what
 is already here.
 

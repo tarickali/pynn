@@ -136,6 +136,16 @@ already there and never zeroes them, so gradient accumulation over micro-batches
 calling it twice. The corollary is that a training loop *must* call `zero_grad()`
 between steps.
 
+Read "twice" precisely: *two forward passes over the same leaves*, each building its own
+graph. Calling `backward` twice on **one** graph is a different thing and this library
+gets it wrong — every Tensor keeps a `grad`, intermediates included, and every reverse
+closure reads its output's stored gradient, so the second pass finds the first pass's
+values still on every intermediate and propagates them again. It compounds rather than
+doubling, and the overshoot grows with depth. PyTorch avoids this by storing gradients
+on leaves only and passing intermediates transiently; `TASKS.md` item 4 has the
+measurements and the three ways out. `free_graph` makes it unreachable on any graph the
+caller frees, which is the practical answer until one of those is taken.
+
 What it does *not* do is release the graph afterwards. That is `free_graph`, and §8 is
 about why it is a separate call.
 

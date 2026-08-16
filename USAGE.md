@@ -85,9 +85,9 @@ pytest --cov=pynn                   # + coverage, enforces the 95% floor
 pytest --cov=pynn --cov-report=term-missing   # + which lines are uncovered
 ```
 
-**Expected:** `816 passed, 1 skipped, 6 deselected` · `Total coverage: ~98.4%`
+**Expected:** `820 passed, 1 skipped, 6 deselected` · `Total coverage: ~98.4%`
 
-On Python 3.10 it is `814 passed, 3 skipped`: two of the packaging checks parse
+On Python 3.10 it is `818 passed, 3 skipped`: two of the packaging checks parse
 `pyproject.toml`, and `tomllib` is standard library only from 3.11.
 
 Narrower runs:

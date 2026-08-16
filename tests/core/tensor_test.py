@@ -367,6 +367,58 @@ def test_an_ndarray_on_the_left_stays_on_the_tape(rng):
 
 
 # --------------------------------------------------------------------------- #
+# Re-running one graph
+#
+# Pinned, not endorsed. `backward` never zeroes what it finds, which is what makes
+# gradient accumulation over micro-batches work — but that contract is about separate
+# forward passes over the same leaves, and it does not extend to walking one finished
+# graph twice. TASKS.md item 4 has the options for closing this.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    ("depth", "one_pass", "compounded"),
+    [(1, 3.0, 12.0), (2, 9.0, 45.0), (4, 81.0, 567.0)],
+    ids=["depth-1", "depth-2", "depth-4"],
+)
+def test_a_second_backward_over_one_graph_compounds(depth, one_pass, compounded):
+    """Two passes over one graph do not double its gradient — they compound it.
+
+    Every Tensor keeps a `grad`, intermediates included, and each reverse closure reads
+    its output's *stored* gradient. So the second pass finds the first pass's values
+    still sitting on every intermediate and propagates them again, and the overshoot
+    grows with depth. PyTorch stores gradients on leaves only, which is why
+    `backward(retain_graph=True)` there doubles exactly; its default refuses the second
+    pass outright, as `free_graph` does here.
+
+    This test exists so the numbers cannot drift unnoticed. It asserts what the library
+    does, not what it should do.
+    """
+    x = Tensor(np.ones((2, 2)))
+    node = x
+    for _ in range(depth):
+        node = node * 3.0
+    loss = pmath.sum(node)
+
+    loss.backward()
+    assert np.allclose(x.grad, one_pass)
+
+    loss.backward()
+    assert np.allclose(x.grad, compounded)
+    assert not np.allclose(x.grad, 2 * one_pass), "doubling would be the right answer"
+
+
+def test_two_passes_over_separate_graphs_do_double():
+    """The contrast, and the form the accumulation contract is actually about."""
+    x = Tensor(np.ones((2, 2)))
+
+    for _ in range(2):
+        pmath.sum(x * 3.0).backward()
+
+    assert np.allclose(x.grad, 6.0)
+
+
+# --------------------------------------------------------------------------- #
 # free_graph
 #
 # A finished graph is a reference cycle — every reverse closure references the Tensor
