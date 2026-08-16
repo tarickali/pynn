@@ -75,6 +75,25 @@ def test_sweep_covers_every_operation() -> None:
     assert len(reused) >= 25, f"only {len(reused)} reuse cases"
 
 
+@pytest.mark.parametrize("seed", [1, 7, 3, 11])
+def test_the_pooling_checks_do_not_depend_on_the_default_seed(seed: int) -> None:
+    """A case that passes only for `DEFAULT_SEED` is worse than no case at all.
+
+    These two were exactly that. Both pooling checks drew inputs from a permutation of
+    `0..n`, so the sum a central difference differences ran to the hundreds, and
+    round-off divided by `2 * eps = 2e-6` cleared `atol` for gradient elements near
+    zero. Three of six seeds failed and the default one passed. Scaling the
+    permutation into [-0.5, 0.5] fixed it, and this pins it: the pooling cases are the
+    only ones in the sweep whose inputs are not O(1) by construction, which is what
+    made them the ones to drift.
+    """
+    for case in gradient_cases(seed):
+        if "pool" not in case.name:
+            continue
+        result = check_gradients(case.fn, case.inputs, eps=case.eps, rtol=case.rtol)
+        assert result.passed, f"\n{case.name} at seed {seed}:\n{result}"
+
+
 # --------------------------------------------------------------------------- #
 # Agreement between formulations
 #

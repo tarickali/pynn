@@ -848,12 +848,28 @@ def gradient_cases(seed: int = DEFAULT_SEED) -> list[GradientCase]:
         )
     )
 
-    # Pooling. Values are drawn far enough apart that a central-difference probe cannot
-    # change which element wins a max window, where the function is not differentiable.
+    # Pooling. Max pooling needs values drawn far enough apart that a probe of size
+    # `eps` cannot change which element wins a window, where the function is not
+    # differentiable. A permutation supplies that; dividing it through keeps the gap at
+    # `1/n` — still four orders of magnitude above `eps` — while holding the values
+    # inside [-0.5, 0.5].
+    #
+    # The scaling is the point, not incidental. A bare permutation runs to 99, and
+    # round-off in `f(x + eps) - f(x - eps)` scales with `|f|`: divided by
+    # `2 * eps = 2e-6` it reached 1e-7, past `atol`, for gradient elements that are
+    # near zero. Both pooling checks then passed at the default seed and failed at
+    # others, which is the worst way for a check to be wrong.
     def separated(*shape: int) -> Tensor:
-        return Tensor(rng.permutation(int(np.prod(shape))).reshape(shape).astype(float))
+        count = int(np.prod(shape))
+        spread = (rng.permutation(count) - (count - 1) / 2) / count
+        return Tensor(spread.reshape(shape))
 
-    for pool_name, pool in [("max_pool2d", max_pool2d), ("avg_pool2d", avg_pool2d)]:
+    # Average pooling is smooth, so it needs no separation at all and takes the same
+    # normal inputs as everything else.
+    for pool_name, pool, domain in [
+        ("max_pool2d", max_pool2d, separated),
+        ("avg_pool2d", avg_pool2d, normal),
+    ]:
         for kernel, step, pad in [
             ((2, 2), None, (0, 0)),
             ((2, 2), (1, 1), (0, 0)),
@@ -866,14 +882,14 @@ def gradient_cases(seed: int = DEFAULT_SEED) -> list[GradientCase]:
                 (
                     f"{pool_name} kernel={kernel} stride={step} padding={pad}",
                     _pool_case(pool, kernel, step, pad),
-                    [separated(2, 2, 5, 5), normal(*pooled)],
+                    [domain(2, 2, 5, 5), normal(*pooled)],
                 )
             )
         cases.append(
             (
                 f"{pool_name} with a reused input",
                 _pool_reuse_case(pool),
-                [separated(2, 2, 4, 4), normal(2, 2, 4, 4)],
+                [domain(2, 2, 4, 4), normal(2, 2, 4, 4)],
             )
         )
 

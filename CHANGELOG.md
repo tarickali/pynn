@@ -72,6 +72,21 @@ While the major version is 0, the public API may change between minor versions.
   `python scripts/generate_tape_figure.py` regenerates it; only that script needs
   Graphviz, and it writes the DOT either way.
 
+### Fixed
+
+- **The pooling gradient checks passed at the default seed and failed at others.** Both
+  drew their inputs from a permutation of `0..n`, which max pooling needs — a probe of
+  size `eps` must not be able to change which element wins a window — and average
+  pooling does not. At values running to 99 the sum a central difference differences
+  reaches the hundreds, and round-off in `f(x + eps) - f(x - eps)` divided by
+  `2 * eps = 2e-6` cleared `atol` for the gradient elements near zero. Three of six
+  seeds failed. The permutation is now scaled into `[-0.5, 0.5]`, which keeps the gap
+  between values four orders of magnitude above `eps`, and average pooling takes the
+  same normal inputs as everything else. The whole sweep is now clean across 60 seeds,
+  and `tests/test_gradcheck.py` pins the pooling cases at four of them — these were the
+  only cases in the sweep whose inputs were not O(1) by construction, which is what
+  made them the ones to drift.
+
 ### Changed
 
 - **Every optimizer's `update` runs in place.** Profiling an MLP training step put 32%
