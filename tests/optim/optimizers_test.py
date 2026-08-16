@@ -1139,3 +1139,24 @@ def test_plateau_rejects_invalid_arguments(kwargs, message):
     optimizer = SGD([{"w": Tensor(np.array([START]))}], learning_rate=1.0)
     with pytest.raises(ValueError, match=message):
         ReduceLROnPlateau(optimizer, **kwargs)
+
+
+def test_plateau_relative_threshold_handles_a_negative_metric():
+    """A metric that is getting worse must never read as an improvement.
+
+    Written PyTorch's way, `best * (1 - threshold)` with a best of -5.0 puts the bar at
+    -4.9995, so -4.9996 — a *worse* value — counts as progress and the counter resets
+    forever. Taking the threshold as a magnitude of `best` is the same arithmetic for a
+    positive metric and correct for a negative one.
+    """
+    worsening = [-5.0, -4.9996, -4.9992, -4.9988]
+
+    assert plateau(worsening, patience=1, factor=0.5) == pytest.approx(
+        [1.0, 1.0, 0.5, 0.5]
+    )
+
+
+def test_plateau_relative_threshold_still_tracks_a_negative_metric_improving():
+    improving = [-5.0, -6.0, -7.0, -8.0]
+
+    assert plateau(improving, patience=0, factor=0.5) == pytest.approx([1.0] * 4)

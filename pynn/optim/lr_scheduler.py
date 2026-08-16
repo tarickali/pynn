@@ -328,7 +328,10 @@ class ReduceLROnPlateau:
         How much better counts as better, so that noise around a plateau does not keep
         resetting the counter.
     threshold_mode : {"rel", "abs"}, default "rel"
-        Whether `threshold` is a fraction of the best value or an absolute amount.
+        Whether `threshold` is a fraction of the best value's *magnitude* or an
+        absolute amount. The magnitude is the one divergence from PyTorch here: it
+        writes the relative bar as `best * (1 - threshold)`, under which a negative
+        metric improves by getting worse.
     cooldown : int, default 0
         Epochs to wait after a reduction before counting bad epochs again — the metric
         needs time to respond to the new rate.
@@ -385,13 +388,26 @@ class ReduceLROnPlateau:
         self.cooldown_counter = 0
 
     def _is_better(self, metric: float) -> bool:
+        if math.isinf(self.best):
+            # Nothing recorded yet, so anything counts. Handled here rather than by a
+            # separate flag because the relative margin below would be `inf * eps`,
+            # and `inf - inf` is `nan`, which loses every comparison.
+            return True
+
+        # `abs(best)` rather than `best`, which is where this differs from PyTorch and
+        # deliberately so. Written as `best * (1 - threshold)`, a *negative* metric
+        # improves by getting worse: with a best of -5.0 the bar becomes -4.9995, so
+        # -4.9996 reads as progress. Taking the threshold as a magnitude is the same
+        # arithmetic wherever the metric is positive, which is nearly always, and right
+        # where it is not.
+        margin = (
+            abs(self.best) * self.threshold
+            if self.threshold_mode == "rel"
+            else self.threshold
+        )
         if self.mode == "min":
-            if self.threshold_mode == "rel":
-                return metric < self.best * (1.0 - self.threshold)
-            return metric < self.best - self.threshold
-        if self.threshold_mode == "rel":
-            return metric > self.best * (1.0 + self.threshold)
-        return metric > self.best + self.threshold
+            return metric < self.best - margin
+        return metric > self.best + margin
 
     def step(self, metric: float | Tensor) -> float:
         """Record `metric` for this epoch and return the resulting learning rate.
