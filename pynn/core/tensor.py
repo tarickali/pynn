@@ -100,11 +100,41 @@ class Tensor:
         #: a frozen parameter still receives gradients, the optimizer just skips it.
         self.trainable = True
 
-    # TODO: Should I have cast be inplace?
-    def cast(self, dtype: DataType) -> None:
+    def cast(self, dtype: DataType) -> Tensor:
+        """Change this Tensor's element type, in place, and return it.
+
+        In place rather than returning a new Tensor, and the reason is the same one
+        `Module.train()` and `freeze()` are: what you are usually casting is a leaf you
+        are about to use — an input batch, a parameter — and a version that returned a
+        copy would leave every caller who forgot to rebind silently working with the
+        old dtype. `self` is returned so it still chains.
+
+        The gradient follows the data, except that a non-floating cast leaves it
+        float64: a gradient is real-valued, so an integer or boolean Tensor cannot
+        carry one of its own type.
+
+        **Do not cast a Tensor an operation has already read.** A reverse closure reads
+        its inputs' `data` when it runs rather than when it was built, so re-typing a
+        node mid-graph takes the gradient at a precision the forward pass never saw —
+        the same hazard `__setitem__` refuses outright (`docs/DESIGN.md` §14). It is
+        not refused here because the legitimate use, casting a leaf before it is used,
+        is indistinguishable from the illegitimate one without a version counter on
+        every Tensor.
+
+        Parameters
+        ----------
+        dtype : DataType
+            Target element type. A no-op when it already matches.
+
+        Returns
+        -------
+        Tensor
+            `self`, cast.
+        """
         if dtype != self.dtype:
             self.data = self.data.astype(dtype)
             self.grad = self.grad.astype(gradient_dtype(self.dtype))
+        return self
 
     def numpy(self) -> Array:
         return self.data

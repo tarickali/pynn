@@ -75,36 +75,56 @@ class Linear(Module):
             self.bias_init = initializer_factory(self.bias_initializer)
 
     def build(self, input_shape: Shape) -> None:
-        assert len(input_shape) == 2
+        if len(input_shape) != 2:
+            raise ValueError(
+                f"Linear expects an input of rank 2, (batch, in_features), got shape "
+                f"{tuple(input_shape)}. Put a Flatten() in front of it to collapse the "
+                "trailing axes."
+            )
         if self.in_features is None:
             self.in_features = input_shape[1]
-        else:
-            assert input_shape[1] == self.in_features, (
-                f"Expected in_features {self.in_features}, got {input_shape[1]}"
+        elif input_shape[1] != self.in_features:
+            raise ValueError(
+                f"Linear({self.in_features}, {self.out_features}) expects "
+                f"{self.in_features} input features, got {input_shape[1]}"
             )
 
-        W = self.register_parameter(
-            "W", self.weight_init((self.in_features, self.out_features))
-        )
-        assert W.shape == (self.in_features, self.out_features)
+        expected = (self.in_features, self.out_features)
+        W = self.register_parameter("W", self.weight_init(expected))
+        if W.shape != expected:
+            raise ValueError(
+                f"{self.weight_initializer!r} returned a weight of shape {W.shape} "
+                f"for a requested {expected}"
+            )
 
         if self.include_bias:
             b = self.register_parameter("b", self.bias_init((self.out_features,)))
-            assert b.shape == (self.out_features,)
+            if b.shape != (self.out_features,):
+                raise ValueError(
+                    f"{self.bias_initializer!r} returned a bias of shape {b.shape} "
+                    f"for a requested {(self.out_features,)}"
+                )
 
         self.initialized = True
 
     def forward(self, X: Tensor) -> Tensor:
         if not self.initialized:
             self.build(X.shape)
-        assert X.shape[1] == self.in_features
+        if X.ndim != 2 or X.shape[1] != self.in_features:
+            # Checked on every call, not only the first: a layer built against one
+            # width and then handed another would otherwise fail inside `matmul`.
+            raise ValueError(
+                f"Linear({self.in_features}, {self.out_features}) expects an input of "
+                f"shape (batch, {self.in_features}), got {X.shape}"
+            )
 
         W, b = self.parameters["W"], self.parameters.get("b", None)
-        Z = linear(X, W, b)
-        assert Z.shape == (X.shape[0], self.out_features)
-
-        A = self.act_fn(Z)
-        assert A.shape == (X.shape[0], self.out_features)
+        A = self.act_fn(linear(X, W, b))
+        if A.shape != (X.shape[0], self.out_features):
+            raise ValueError(
+                f"the {self.activation!r} activation changed the shape of this layer's "
+                f"output from {(X.shape[0], self.out_features)} to {A.shape}"
+            )
 
         return A
 
@@ -183,9 +203,16 @@ class Conv2d(Module):
         return make_pair(p)
 
     def build(self, input_shape: Shape) -> None:
-        assert len(input_shape) == 4
+        if len(input_shape) != 4:
+            raise ValueError(
+                f"Conv2d expects an input of rank 4, (batch, channels, height, "
+                f"width), got shape {tuple(input_shape)}"
+            )
         _, in_ch, in_h, in_w = input_shape
-        assert in_ch == self.in_channels
+        if in_ch != self.in_channels:
+            raise ValueError(
+                f"Conv2d was built for {self.in_channels} input channels, got {in_ch}"
+            )
 
         kh, kw = self.kernel_size
         sh, sw = self.stride
@@ -203,18 +230,32 @@ class Conv2d(Module):
         self.bias_shape: Shape = (self.out_channels, 1, 1)
 
         K = self.register_parameter("K", self.kernel_init(self.kernel_shape))
-        assert K.shape == self.kernel_shape
+        if K.shape != self.kernel_shape:
+            raise ValueError(
+                f"{self.kernel_initializer!r} returned a kernel of shape {K.shape} "
+                f"for a requested {self.kernel_shape}"
+            )
 
         if self.include_bias:
             B = self.register_parameter("B", self.bias_init(self.bias_shape))
-            assert B.shape == self.bias_shape
+            if B.shape != self.bias_shape:
+                raise ValueError(
+                    f"{self.bias_initializer!r} returned a bias of shape {B.shape} "
+                    f"for a requested {self.bias_shape}"
+                )
 
         self.initialized = True
 
     def forward(self, X: Tensor) -> Tensor:
         if not self.initialized:
             self.build(X.shape)
-        assert X.shape[1:] == self.input_shape
+        if X.shape[1:] != self.input_shape:
+            # Checked on every call, not only the first: the spatial dimensions are
+            # baked into the padding this layer resolved when it was built.
+            raise ValueError(
+                f"Conv2d was built for an input of shape (batch, "
+                f"{', '.join(str(d) for d in self.input_shape or ())}), got {X.shape}"
+            )
 
         K = self.parameters["K"]
         B = self.parameters.get("B", None)

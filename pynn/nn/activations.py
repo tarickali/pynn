@@ -37,9 +37,11 @@ __all__ = [
 
 
 class Identity(Activation):
-    """Identity Activation
+    """Returns its input unchanged: `f(x) = x`.
 
-    Computes the elementwise computetion `f(x) = x`.
+    The default activation for every layer, so it is on the tape of nearly every
+    model — `docs/DESIGN.md` §2 has the node it leaves behind and why it is there.
+    For the `Module` form, which is what a container holds, see `pynn.nn.Identity`.
 
     """
 
@@ -48,15 +50,12 @@ class Identity(Activation):
 
 
 class Affine(Activation):
-    """Affine Activation.
-
-    Parameterized by `slope` [float] and `intercept` [float], computes the
-    computetion `f(x) = slope * x + intercept`.
+    """A straight line: `f(x) = slope * x + intercept`.
 
     Parameters
     ----------
-    slope : float
-    intercept : float
+    slope : float, default 1.0
+    intercept : float, default 0.0
 
     """
 
@@ -70,15 +69,16 @@ class Affine(Activation):
 
 
 class ReLU(Activation):
-    """ReLU Activation
+    """`f(x) = x` above zero, `alpha * x` below it.
 
-    Parameterized by `alpha` [float], computes the computetion
-    ```
-    f(x) = {
-        x : x >= 0,
-        alpha * x : x < 0
-    }
-    ```.
+    `alpha=0.0` is the plain rectifier; any positive value makes it a leaky ReLU,
+    which keeps a gradient flowing through units the plain form would switch off
+    permanently.
+
+    Parameters
+    ----------
+    alpha : float, default 0.0
+        Slope on the negative side.
 
     """
 
@@ -91,9 +91,10 @@ class ReLU(Activation):
 
 
 class Sigmoid(Activation):
-    """Sigmoid Activation
+    """`f(x) = 1 / (1 + exp(-x))`, squashing the line onto (0, 1).
 
-    Computes the computetion `f(x) = 1 / (1 + exp(-x))`.
+    Evaluated by the branch-on-sign kernel in `pynn.core.numeric`, since the naive
+    form overflows for large negative `x`.
 
     """
 
@@ -102,26 +103,23 @@ class Sigmoid(Activation):
 
 
 class Tanh(Activation):
-    """Tanh Activation
-
-    Computes the computetion `f(x) = tanh(x)`.
-
-    """
+    """`f(x) = tanh(x)`, squashing the line onto (-1, 1)."""
 
     def compute(self, x: Tensor) -> Tensor:
         return tanh(x)
 
 
 class ELU(Activation):
-    """ELU Activation
+    """`f(x) = x` above zero, `alpha * (exp(x) - 1)` below it.
 
-    Parameterized by `alpha` [float], computes the computetion
-    ```
-    f(x) = {
-        x : x >= 0,
-        alpha * (exp(x) - 1) : x < 0
-    }
-    ```.
+    Saturates to `-alpha` rather than to zero, so the mean activation sits nearer
+    zero than a ReLU's does. Computed with `expm1` on a clamped input, or the two
+    terms cancel catastrophically near zero.
+
+    Parameters
+    ----------
+    alpha : float, default 1.0
+        The negative saturation value.
 
     """
 
@@ -134,18 +132,13 @@ class ELU(Activation):
 
 
 class SELU(Activation):
-    """SELU Activation
+    """ELU with the two constants that make it self-normalizing.
 
-    Computes the computetion
-    ```
-    f(x) = {
-        SCALE * x : x >= 0,
-        SCALE * ALPHA * (exp(x) - 1) : x < 0
-    }
-    ```
-    where
-    SCALE = 1.0507009873554804934193349852946,
-    ALPHA = 1.6732632423543772848170429916717
+    `f(x) = SCALE * x` above zero and `SCALE * ALPHA * (exp(x) - 1)` below it, with
+    `SCALE = 1.0507009873554805` and `ALPHA = 1.6732632423543772`. The constants are
+    not free parameters: they are the fixed point at which activations keep unit mean
+    and variance from layer to layer, which is the whole claim of the paper. Changing
+    either one gives an ELU with unusual constants, not a SELU.
 
     """
 
@@ -154,9 +147,10 @@ class SELU(Activation):
 
 
 class SoftPlus(Activation):
-    """SoftPlus Activation
+    """`f(x) = log(1 + exp(x))`, a smooth ReLU.
 
-    Computes the computetion `f(x) = log(1 + exp(x))`.
+    Evaluated as `logaddexp(0, x)`, since the literal form returns `inf` past
+    `x ~ 709`, where `exp` leaves float64 range.
 
     """
 
@@ -165,9 +159,7 @@ class SoftPlus(Activation):
 
 
 class Softmax(Activation):
-    """Softmax Activation
-
-    Computes f(x) = exp(x) / sum(exp(x)) over the given axis.
+    """`f(x) = exp(x) / sum(exp(x))` over the given axis.
     Default axis=-1 (last axis, e.g. class logits).
 
     The gradient uses the full softmax Jacobian: dL/dz = s * (g - sum(s*g)),

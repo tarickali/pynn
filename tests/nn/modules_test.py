@@ -151,8 +151,120 @@ def test_linear_infers_in_features_from_the_first_input():
 
 def test_linear_rejects_a_mismatched_in_features():
     layer = Linear(4, 3)
-    with pytest.raises(AssertionError):
+    with pytest.raises(ValueError, match="expects 4 input features, got 7"):
         layer(Tensor(np.zeros((5, 7))))
+
+
+# --------------------------------------------------------------------------- #
+# Shape errors name the fix
+#
+# These were bare `assert`s, which state the condition and nothing else and are
+# removed entirely by `python -O` — so a model run under optimization got a
+# `matmul` shape error several frames away instead, or silently wrong parameters
+# from a custom initializer. Every one of them is now a raise, and the tests below
+# exist so that the messages are covered rather than merely present.
+# --------------------------------------------------------------------------- #
+
+
+def test_linear_rejects_a_non_matrix_input_and_names_flatten():
+    with pytest.raises(ValueError, match=r"rank 2.*Flatten"):
+        Linear(3)(Tensor(np.zeros((5, 2, 3))))
+
+
+def test_linear_rechecks_the_width_on_every_call():
+    """A layer built against one width and handed another used to die in `matmul`."""
+    layer = Linear(3)
+    layer(Tensor(np.zeros((5, 4))))  # infers in_features = 4
+
+    with pytest.raises(ValueError, match=r"shape \(batch, 4\), got \(5, 6\)"):
+        layer(Tensor(np.zeros((5, 6))))
+
+
+def test_linear_reports_an_initializer_that_returns_the_wrong_shape():
+    layer = Linear(4, 3)
+    layer.weight_init = lambda shape: np.zeros((2, 2))
+
+    with pytest.raises(ValueError, match="returned a weight of shape"):
+        layer(Tensor(np.zeros((5, 4))))
+
+
+def test_linear_reports_a_bias_initializer_that_returns_the_wrong_shape():
+    layer = Linear(4, 3)
+    layer.bias_init = lambda shape: np.zeros((7,))
+
+    with pytest.raises(ValueError, match="returned a bias of shape"):
+        layer(Tensor(np.zeros((5, 4))))
+
+
+def test_linear_reports_an_activation_that_changes_the_shape():
+    layer = Linear(4, 3)
+    layer(Tensor(np.zeros((5, 4))))  # build first, so the activation is what fails
+    layer.act_fn = lambda Z: Z[:, :2]
+
+    with pytest.raises(ValueError, match="activation changed the shape"):
+        layer(Tensor(np.zeros((5, 4))))
+
+
+def test_conv2d_rejects_an_input_that_is_not_an_image():
+    with pytest.raises(ValueError, match="rank 4"):
+        Conv2d(in_channels=1, out_channels=2, kernel_size=3)(Tensor(np.zeros((5, 4))))
+
+
+def test_conv2d_rejects_a_mismatched_channel_count():
+    layer = Conv2d(in_channels=3, out_channels=2, kernel_size=3)
+    with pytest.raises(ValueError, match="built for 3 input channels, got 1"):
+        layer(Tensor(np.zeros((2, 1, 8, 8))))
+
+
+def test_conv2d_rechecks_the_spatial_shape_on_every_call():
+    """`padding='same'` is resolved at build time against those exact dimensions."""
+    layer = Conv2d(in_channels=1, out_channels=2, kernel_size=3, padding="same")
+    layer(Tensor(np.zeros((2, 1, 8, 8))))
+
+    with pytest.raises(
+        ValueError, match=r"built for an input of shape \(batch, 1, 8, 8"
+    ):
+        layer(Tensor(np.zeros((2, 1, 12, 12))))
+
+
+def test_conv2d_reports_an_initializer_that_returns_the_wrong_shape():
+    layer = Conv2d(in_channels=1, out_channels=2, kernel_size=3)
+    layer.kernel_init = lambda shape: np.zeros((1, 1, 1, 1))
+
+    with pytest.raises(ValueError, match="returned a kernel of shape"):
+        layer(Tensor(np.zeros((2, 1, 8, 8))))
+
+
+def test_conv2d_reports_a_bias_initializer_that_returns_the_wrong_shape():
+    layer = Conv2d(in_channels=1, out_channels=2, kernel_size=3)
+    layer.bias_init = lambda shape: np.zeros((5, 1, 1))
+
+    with pytest.raises(ValueError, match="returned a bias of shape"):
+        layer(Tensor(np.zeros((2, 1, 8, 8))))
+
+
+def test_the_shape_guards_survive_python_dash_o():
+    """The whole point: `assert` is removed by `-O` and these must not be.
+
+    Run in a subprocess, because `-O` is an interpreter flag rather than a runtime
+    switch — there is no way to assert this from inside a normal test session.
+    """
+    import subprocess
+    import sys
+
+    program = (
+        "import numpy as np;"
+        "from pynn.core import Tensor;"
+        "from pynn.nn import Linear;"
+        "layer = Linear(4, 3);"
+        "layer(Tensor(np.zeros((5, 7))))"
+    )
+    result = subprocess.run(
+        [sys.executable, "-O", "-c", program], capture_output=True, text=True
+    )
+
+    assert result.returncode != 0
+    assert "expects 4 input features, got 7" in result.stderr
 
 
 def test_linear_rejects_too_many_dimensions():

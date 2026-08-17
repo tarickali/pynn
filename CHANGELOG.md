@@ -137,6 +137,29 @@ While the major version is 0, the public API may change between minor versions.
 
 ### Changed
 
+- **`Linear` and `Conv2d` raise instead of asserting.** Twelve bare `assert`s validated
+  user-supplied shapes, initializer output, and activation output. Two problems: an
+  `assert` states the condition and nothing else — `assert X.shape[1] ==
+  self.in_features` tells a caller no more than the `matmul` error it was preempting —
+  and `python -O` removes them outright, so a model run under optimization got the
+  downstream failure several frames away, or silently accepted a custom initializer that
+  returned the wrong shape. Each is now a `ValueError` naming what was expected, what
+  arrived, and where applicable the fix (a rank-3 input to `Linear` points at
+  `Flatten()`). Two of the twelve went the other way: `Linear.forward`'s check that
+  `linear()` returned the shape it was asked for cannot fail unless `linear` is broken,
+  which 226 gradient checks already cover, and it was deleted rather than converted. A
+  subprocess test runs the guard under `-O`, since there is no way to assert that from
+  inside a normal session.
+- **`Tensor.cast` returns `self`** rather than `None`, so it chains the way
+  `Module.train()` and `freeze()` do, and it has a docstring — including the hazard it
+  shares with `__setitem__`, that re-typing a Tensor an operation has already read takes
+  the gradient at a precision the forward pass never saw. This resolves a `# TODO:
+  Should I have cast be inplace?` that had been in `pynn/core/tensor.py` since before
+  the first release. Yes, in place, and now the reasoning is written down.
+- **`pynn/nn/activations.py`'s docstrings**, which said "computes the computetion" nine
+  times and were thinner than every other module's. Rewritten to say what each function
+  is for — why SELU's two constants are not free parameters, why `softplus` is evaluated
+  as `logaddexp(0, x)`, what `alpha` buys a leaky ReLU.
 - **Every optimizer's `update` runs in place.** Profiling an MLP training step put 32%
   of it in `SGD.update`, and none of that was a Python loop — it was allocation. Each
   line of each update rule built a fresh full-size array: seven per parameter per step
