@@ -17,6 +17,9 @@ does not support and PyTorch refuses by default, and `Tensor.free_graph()` now m
 unreachable on any graph the caller frees — but it is wrong quietly, which is the
 failure mode this codebase is otherwise built to avoid.
 
+**Item 3a is the exception to "independent".** It is a measurement harness, and the two
+remaining acceleration candidates cannot honestly be decided without it.
+
 ---
 
 ## Nice to have
@@ -83,53 +86,108 @@ the bar is "worth the duplication", not "faster in a microbenchmark".
 | Candidate | Isolated speedup | Share of a step | Verdict |
 | --- | --- | --- | --- |
 | `col2im` scatter | 2–13x | 42% of a CNN step | **done** |
-| Optimizer step | 4.6–7.2x compiled | was 32%, now ~15% of an MLP step | **in-place done, not compiling** |
-| `stable_sigmoid` | 3.3–3.7x | model-dependent | maybe |
-| `erf` | 7.1–7.5x | GELU exact path only | cheap, narrow |
+| Optimizer step | 4.6–7.2x compiled | ~30% → ~15% of a profiled MLP step | **in-place done, not compiling** |
+| `stable_sigmoid` | 3.3–3.7x *isolated* | never measured end to end | **blocked on item 3a** |
+| `erf` | 7.1–7.5x *isolated* | GELU exact path only | cheap, narrow, same caveat |
 | `im2col`'s copy | none | 4.6% of a CNN step | no |
 
-**The optimizer step is done, in place, with no dependency**, and the measurement that
-came out of it is worth more than the speedup: *an isolated microbenchmark of an
-update rule roughly doubles the gain you actually get.*
+Read the "isolated speedup" column with the warning in **item 3a** in hand. Every number
+in it is a microbenchmark, and for the optimizer — the one candidate that has now been
+built and measured both ways — the microbenchmark could not be converted into an
+end-to-end number at all.
 
-All six update rules now mutate their buffers with `*=` / `+=` / `out=` and apply the
-step as `data -= ...`, leaving the arithmetic bit-for-bit identical — checked directly,
-across 80 flag combinations, against the pre-rewrite implementations. Momentum SGD went
-from seven full-size allocations per parameter per step to one, and Adam from sixteen to
-three. Timed on the benchmark MLP's 269,322 parameters, old and new strictly alternated
-per sample so machine load lands on both:
+#### The optimizer step: done, in place, no dependency
 
-| | isolated `update()` | in a real training loop |
-| --- | --- | --- |
-| SGD | 0.54 → 0.22 ms (**2.5x**) | — |
-| SGD, momentum 0.9 | 1.13 → 0.37 ms (**3.0x**) | 0.57 → 0.35 ms (**1.6x**) |
-| Adam | 2.53 → 1.45 ms (1.7x) | — |
-| RMSprop / Adagrad / Adadelta | 1.4–1.8x | — |
+All six update rules mutate their buffers with `*=` / `+=` / `out=` and apply the step as
+`data -= ...`. The arithmetic is **bit-for-bit identical**, checked directly against the
+pre-rewrite implementations across 80 flag combinations with `array_equal` rather than
+`allclose`. Momentum SGD went from seven full-size allocations per parameter per step to
+one; Adam from sixteen to three. Those two facts are countable rather than timed, and they
+are the firmest thing here.
 
-**The two right-hand columns are the finding.** Isolated, the buffers stay in cache
-between calls and the allocations are most of what is left to measure. In a real step
-the forward and backward passes evict them, so a share of `update`'s cost is cold reads
-that both versions pay and cannot be optimized away — 3.0x becomes 1.6x. The
-`col2im`-style microbenchmark is the wrong instrument for a function whose working set
-is the whole parameter vector.
+The timing that *is* reliable is isolated `update()` on a single parameter, old and new
+alternating per call, reproduced across three runs:
 
-`SGD.update` is now **~15% of an MLP step**, down from ~32% (24% → 15% by wall clock at
-the 5th percentile; 30% → 15% under cProfile, which inflates Python-heavy frames). End
-to end the MLP step is ~1.08x and the LSTM ~1.08x; the CNN does not move, since its
-20,522 parameters are a thirteenth of the MLP's and its time is in `conv2d`.
+| ratio old/new | 10 | 256 | 2,560 | 65,536 | 200,704 |
+| --- | --- | --- | --- | --- | --- |
+| SGD | 1.23x | 1.29x | 1.51x | 2.14x | 2.60x |
+| SGD, momentum 0.9 | 1.39x | 1.49x | 1.66x | 2.09x | 3.08x |
+| Adam | 1.14x | 1.23x | 1.22x | 1.45x | 1.92x |
+| RMSprop | 1.16x | 1.22x | 1.21x | 1.44x | 1.64x |
+| Adagrad | 1.19x | 1.25x | 1.22x | 1.40x | 1.52x |
+| Adadelta | 1.17x | 1.26x | 1.25x | 1.31x | 2.05x |
 
-**Not compiling the remainder.** The 4.6–7.2x for a fused `njit` kernel was measured the
-isolated way, so apply the discount above and it lands nearer 2.5–3.8x in a loop. But
-the ceiling is the argument, not the ratio: an update rule that took *zero* time would
-save 0.35 ms of a 2.6 ms step, 13%, and that is the *most* a kernel can be worth. The
-price is a dual implementation per optimizer — six of them, each with `maximize` /
-`nesterov` / `amsgrad` / `centered` variants — against `col2im`'s single scatter. Revisit
-only if a profile of a much larger model puts it back near 30%.
+**The gradient of that table is the point.** The win is allocation, so it grows with the
+array, and on a small parameter there is almost nothing to save — what is left is
+per-call NumPy dispatch, which the in-place form does not reduce and in places increases.
+The benchmark MLP has six parameters and *four* of them are in the first three columns
+(256, 256, 2,560, 10). That is the honest explanation for why a 2–3x on the function does
+not become a 2–3x on the step, and it is a better one than the cache story an earlier
+draft of this section gave.
+
+Under cProfile, interleaved and repeated in one process, the optimizer's share of an MLP
+step goes from **~30% to ~15%**. Note what that is: a share of profiled time, not of wall
+clock. It is quoted because it is the one before/after comparison the machine could make
+repeatably.
+
+**Not compiling the remainder**, and item 3a is now most of the reason. A fused `njit`
+kernel was measured at 4.6–7.2x by the same isolated method that has just been shown not
+to survive contact with a training loop. Even taking it at face value, an update rule that
+cost *zero* would save ~15% of a profiled step — for a dual implementation per optimizer,
+six of them, each with `maximize` / `nesterov` / `amsgrad` / `centered` variants, against
+`col2im`'s single scatter. Revisit only with a trustworthy end-to-end harness and a model
+whose parameters are large enough for the right-hand columns above to be the typical case.
+
+### 3a. There is no harness that can measure an end-to-end speedup
+
+**This blocks the rest of item 3**, and it came out of the optimizer work rather than
+being anticipated.
+
+Two harnesses were written to convert the isolated numbers above into end-to-end ones,
+and neither is usable:
+
+- **A paired in-loop timer** — build two models, run the same forward and backward for
+  each, and time only `update()`, alternating per sample with the GC off. It has a
+  **demonstrable ordering bias: whichever side of the pair runs first wins, by up to
+  1.5x.** Measured old-first, three optimizers came out *slower* after removing thirteen
+  allocations, which the size table above says is impossible. Swapping the order reverses
+  the verdict. The bias exceeds the signal.
+- **Whole-step timing, fresh process per configuration** — the pattern
+  `benchmarks/memory.py` already uses. The effect is ~0.1–0.2 ms of a ~3.2 ms step and
+  the run-to-run spread is ±0.4 ms, so six alternating runs interleave with no signal.
+  This was on a desktop at load average 3.6; a quiet machine may do better, but that is a
+  hypothesis rather than a result.
+
+What that leaves is real but narrow: allocation counts, isolated per-size ratios, and a
+cProfile share. `stable_sigmoid` and `erf` both need an end-to-end number before anyone
+commits to a second implementation, so **building the harness is the prerequisite, not
+the follow-up.** What it would need:
+
+- A fresh process per configuration, and both orderings run, with the disagreement between
+  them reported rather than averaged away — that disagreement is the error bar.
+- Enough repetitions to state a confidence interval instead of a single ratio, and a
+  refusal to report a ratio the interval straddles 1.0.
+- A model whose parameter sizes span the table above, so a per-size claim can be made
+  rather than one number for "an MLP".
+- Ideally, a quiet machine, or `taskset`-style pinning — and a recorded load average, so a
+  reader knows which of the two situations they are looking at.
+
+`benchmarks/benchmark.py` is not that harness and should not be made into it: its job is
+the PyTorch comparison, where the factor is large enough that ±15% does not matter.
+
+**The README's benchmark table is owed a re-measurement for the same reason.** Its rows
+were taken in a machine state that could not be reproduced while the optimizer work was
+going on: PyTorch's own numbers came out 15–40% away from what the table records (its
+LSTM row moved from 14.5 to 17–21 ms), so the whole machine was in a different place
+rather than PyNN having changed. The table was left alone on the grounds that replacing a
+coherent set of numbers with a noisier one is a loss, and the ±15% caveat under it is
+doing real work. Re-take all three rows in one sitting on a quiet machine, with and
+without the `numba` extra, and record the load average alongside them.
 
 **`stable_sigmoid`** builds a boolean mask and two fancy-indexed temporaries. A fused
-kernel is 3.3–3.7x. It backs `sigmoid`, `softplus`, `silu`, and BCE-with-logits, so the
-end-to-end share depends entirely on the model — worth profiling a sigmoid-heavy one
-before committing.
+kernel is 3.3–3.7x *in isolation*. It backs `sigmoid`, `softplus`, `silu`, and
+BCE-with-logits, so the end-to-end share depends entirely on the model — and, on the
+evidence above, on the array sizes as much as on the model.
 
 **`erf`** is the best ratio and the smallest prize. It is `np.frompyfunc(math.erf)` today,
 which is a Python call per element — a hidden interpreter loop of exactly the kind a JIT

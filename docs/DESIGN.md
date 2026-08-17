@@ -710,21 +710,41 @@ takes momentum SGD to one allocation and Adam to three. The reference transcript
 checked directly against the pre-rewrite implementations across 80 flag combinations,
 `array_equal` rather than `allclose`.
 
-The interesting number is not the speedup, it is the gap between two ways of measuring
-it. In isolation — construct an optimizer, call `update()` in a loop — momentum SGD is
-**3.0x** faster. Inside a real training loop it is **1.6x**. Both are honest; they
-measure different things. Isolated, the parameter, gradient and velocity arrays stay in
-cache between calls, so the allocations are most of what is left to see. In a real step
-the forward and backward passes have just walked ten megabytes of tape, every one of
-those arrays is cold, and a share of `update`'s cost is memory traffic that neither
-version can avoid.
+The interesting part is what happened when the speedup was measured. Isolated —
+construct an optimizer, call `update()` on one parameter in a loop, alternating old and
+new per call — every rule is faster at every size, and the ratio climbs with the array:
 
-That gap is the reason the `njit` kernel measured at 4.6–7.2x for the same code was not
-worth building. Apply the same discount and it is nearer 3x in a loop — but the ceiling
-settles it either way: with the optimizer now at ~15% of a step, a kernel that took *no*
-time at all could save 13%, in exchange for a second implementation of six optimizers
-with four flag variants each. `col2im` earned its duplication at 42% of a CNN step. This
-does not.
+| ratio old/new | 10 | 256 | 2,560 | 65,536 | 200,704 |
+| --- | --- | --- | --- | --- | --- |
+| SGD, momentum 0.9 | 1.39x | 1.49x | 1.66x | 2.09x | 3.08x |
+| Adam | 1.14x | 1.23x | 1.22x | 1.45x | 1.92x |
+| RMSprop | 1.16x | 1.22x | 1.21x | 1.44x | 1.64x |
+
+That gradient is the finding, and it explains the thing that looks like a contradiction:
+the benchmark MLP's step barely moves. The win is allocation, so it scales with the
+array — and four of that MLP's six parameters are 256, 256, 2,560 and 10 elements, where
+there is almost nothing to allocate and what remains is per-call NumPy dispatch, which
+the in-place form does not reduce. A 3x on the function is not a 3x on a step whose
+parameters are mostly small and where `update` was a minority of the time to begin with.
+
+**Getting an end-to-end number turned out to be the hard part, and it failed.** Two
+harnesses were built. A paired in-loop timer — same model, same forward and backward,
+timing only `update()` — has an ordering bias in which whichever side runs first wins by
+up to 1.5x; measured old-first it reported three optimizers as *slower* after removing
+thirteen allocations, which the table above says cannot be. Whole-step timing in a fresh
+process per configuration puts the effect at ~0.1–0.2 ms of a ~3.2 ms step against a
+±0.4 ms run-to-run spread, so six alternating runs interleave with no signal. What
+survives is the allocation count, the per-size ratios, and a cProfile share that goes
+from ~30% to ~15% — a share of *profiled* time, which is the one before/after comparison
+this machine could make repeatably. `TASKS.md` item 3a is the harness that would be
+needed to do better, and it now blocks the remaining acceleration candidates rather than
+following them.
+
+That failure is also most of the reason the `njit` kernel measured at 4.6–7.2x was not
+built: it was measured by the method that has just been shown not to survive contact with
+a training loop. Even at face value, an update rule costing *zero* saves ~15% of a
+profiled step, in exchange for a second implementation of six optimizers with four flag
+variants each. `col2im` earned its duplication at 42% of a CNN step. This does not.
 
 **Two things this made behavioural rather than incidental.** `param.data` is now written
 through rather than rebound, so a caller holding the array — `Tensor.numpy()` returns

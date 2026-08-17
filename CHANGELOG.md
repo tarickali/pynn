@@ -161,13 +161,17 @@ While the major version is 0, the public API may change between minor versions.
   to three. **The arithmetic is bit-for-bit identical** — the closed-form reference
   transcriptions passed unchanged, and the equality was checked directly against the
   pre-rewrite implementations across 80 flag combinations with `array_equal` rather than
-  `allclose`. Momentum SGD's `update` is 3.0x faster measured in isolation and 1.6x
-  inside a real training loop, where the forward and backward passes have evicted the
-  arrays it touches; it is now ~15% of an MLP step rather than ~32%, and the step itself
-  is about 8% faster, inside the benchmark table's stated run-to-run variation. That gap
-  between the isolated and in-loop numbers is why the compiled `njit` kernel `TASKS.md`
-  measured at 4.6–7.2x was not built: the ceiling on it is now 13% of a step, in
-  exchange for a second implementation of six optimizers with four flag variants each.
+  `allclose`. Measured in isolation, every rule is faster at every size and the ratio
+  climbs with the array — 1.2x on a 256-element bias, 3.1x on a 200k-element weight
+  matrix for momentum SGD — because the win is allocation and a small parameter has
+  almost none to save. The optimizer's share of a profiled MLP step falls from ~30% to
+  ~15%. It is **not** measurable end to end on this machine: the effect is ~0.1–0.2 ms
+  of a ~3.2 ms step against a ±0.4 ms run-to-run spread, and two harnesses written to
+  find it were thrown away — a paired in-loop timer with a 1.5x ordering bias, and
+  whole-step timing in a fresh process per configuration whose spread swamps the signal.
+  `TASKS.md` item 3a records what a usable harness would need, and it now blocks the
+  remaining acceleration candidates rather than following them — including the compiled
+  `njit` kernel measured at 4.6–7.2x, which used the method that just failed.
 - **`param.data` is written through rather than rebound.** A consequence of the above,
   and a deliberate one: a caller holding the array — `Tensor.numpy()` returns it — now
   sees training happen, as it would in PyTorch. `state_dict()` and `detach()` copy, so a

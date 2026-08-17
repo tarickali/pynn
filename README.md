@@ -336,11 +336,13 @@ than Python.
 The **MLP** is dominated by `matmul`, where both libraries hand the work to the same
 BLAS, so PyNN's overhead is per-operation Python dispatch and it lands within about 2x.
 Roughly a third of that overhead used to sit somewhere less defensible: `SGD.update` was
-32% of a step, almost all of it allocating a fresh full-size array per line. The update
-rules now run in place, which puts it at ~15% and the step at about 8% faster — inside
-the run-to-run variation above, so the table is unchanged. `docs/DESIGN.md` §15 has the
-measurements, including why the isolated speedup (3.0x) is roughly twice the one a real
-training loop sees (1.6x).
+32% of a profiled step, almost all of it allocating a fresh full-size array per line. The
+update rules now run in place and that share is ~15%. The table is unchanged, and
+deliberately: the end-to-end effect is ~0.1–0.2 ms of a ~3.2 ms step against a ±0.4 ms
+run-to-run spread, which is to say it could not be measured here at all. `docs/DESIGN.md`
+§15 has what could be — the speedup scales with parameter size, from 1.2x on a
+256-element bias to 3.1x on a 200k-element weight matrix — and why two attempts at an
+end-to-end harness were thrown away.
 
 The **CNN** is where PyTorch's fused, multithreaded convolution kernels pull away.
 PyNN's `conv2d` is im2col plus a single `gemm` — a 10–100x improvement over the Python
