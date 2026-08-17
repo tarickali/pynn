@@ -135,21 +135,6 @@ While the major version is 0, the public API may change between minor versions.
   `python scripts/generate_tape_figure.py` regenerates it; only that script needs
   Graphviz, and it writes the DOT either way.
 
-### Fixed
-
-- **The pooling gradient checks passed at the default seed and failed at others.** Both
-  drew their inputs from a permutation of `0..n`, which max pooling needs — a probe of
-  size `eps` must not be able to change which element wins a window — and average
-  pooling does not. At values running to 99 the sum a central difference differences
-  reaches the hundreds, and round-off in `f(x + eps) - f(x - eps)` divided by
-  `2 * eps = 2e-6` cleared `atol` for the gradient elements near zero. Three of six
-  seeds failed. The permutation is now scaled into `[-0.5, 0.5]`, which keeps the gap
-  between values four orders of magnitude above `eps`, and average pooling takes the
-  same normal inputs as everything else. The whole sweep is now clean across 60 seeds,
-  and `tests/test_gradcheck.py` pins the pooling cases at four of them — these were the
-  only cases in the sweep whose inputs were not O(1) by construction, which is what
-  made them the ones to drift.
-
 ### Changed
 
 - **Every optimizer's `update` runs in place.** Profiling an MLP training step put 32%
@@ -200,6 +185,29 @@ While the major version is 0, the public API may change between minor versions.
   ms/step at 918 MB against 81.0 and 860, so there was nothing left for it to find and
   the cadence went rather than being kept alongside. Re-executed; the losses and the
   sampled text are unchanged to the digit, the wall clock moved from 3.5 to 3.6 minutes.
+
+### Removed
+
+- **`main.py` is gone**, along with the README line pointing at it. It had never been
+  committed, so a fresh clone did not have the file the README told you to run, and the
+  copy that existed locally called `SGD(model.parameters, ...)` — the form the library
+  now deliberately refuses, and which `tests/core/module_test.py` exists to assert it
+  refuses. `scripts/smoke_test.py` already does that job dependency-free and is tested.
+
+### Fixed
+
+- **The pooling gradient checks passed at the default seed and failed at others.** Both
+  drew their inputs from a permutation of `0..n`, which max pooling needs — a probe of
+  size `eps` must not be able to change which element wins a window — and average
+  pooling does not. At values running to 99 the sum a central difference differences
+  reaches the hundreds, and round-off in `f(x + eps) - f(x - eps)` divided by
+  `2 * eps = 2e-6` cleared `atol` for the gradient elements near zero. Three of six
+  seeds failed. The permutation is now scaled into `[-0.5, 0.5]`, which keeps the gap
+  between values four orders of magnitude above `eps`, and average pooling takes the
+  same normal inputs as everything else. The whole sweep is now clean across 60 seeds,
+  and `tests/test_gradcheck.py` pins the pooling cases at four of them — these were the
+  only cases in the sweep whose inputs were not O(1) by construction, which is what
+  made them the ones to drift.
 
 ## [0.1.0] - 2026-08-12
 

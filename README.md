@@ -150,12 +150,6 @@ python scripts/download_mnist.py         # ~227 MB
 python scripts/download_shakespeare.py   # ~1.1 MB, stdlib only
 ```
 
-Or run the Quick Start example:
-
-```bash
-python main.py
-```
-
 ---
 
 ## Testing
