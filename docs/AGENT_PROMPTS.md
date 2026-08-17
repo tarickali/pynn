@@ -1,40 +1,63 @@
 # Agent prompts
 
-Independent work packages covering items 1-3 of [`TASKS.md`](../TASKS.md). Each is
-self-contained and touches a mostly disjoint set of files, so they can run in any order —
-or in parallel, if each agent works on its own branch and rebases before merging.
+A record of the work packages handed to agents, what each produced, and what each turned
+up that nobody had asked for. **All five are done**; the sections below are kept for the
+shared preamble, which is still the right starting point for a new one, and for the
+"what X left behind" notes, which are the most useful part of the file.
 
-Items 4 and 5, and items 6-8, the sequence-modelling chain, are deliberately not
-covered here: 4 is a decision rather than a package, 5 postdates the prompts, and
-the chain is a dependency chain rather than independent packages — future work
-rather than queued work. They would want their own prompts, written when they are
-actually scheduled.
+Items 4 and 5, and items 6-8, the sequence-modelling chain, were deliberately never
+covered: 4 is a decision rather than a package, 5 postdates the prompts, and the chain is
+a dependency chain rather than independent packages — future work rather than queued work.
+Item 3a postdates them too, and is a measurement problem rather than a feature.
 
-Copy one prompt verbatim into a fresh agent session.
+To hand out new work, copy the shared preamble verbatim and write the brief underneath it.
 
 | Prompt | TASKS.md items | Rough size |
 | --- | --- | --- |
 | ~~A — Packaging and process~~ | — | **done** |
-| B — Testing, layers, performance | 1, 2, 3 | large |
+| ~~B — Testing, layers, performance~~ | 1, 2, 3 | **done** |
 | ~~C — A second example domain~~ | — | **done** |
 | ~~D — Graph visualizer~~ | — | **done** |
 | ~~E — Reclaim the tape~~ | — | **done** |
 
-Prompts A, C, D, and E are finished and their sections removed. A produced
-`CONTRIBUTING.md`, `CHANGELOG.md`, the annotated `v0.1.0` tag, `pynn/py.typed`,
-`pynn.__version__`, the exact ruff and mypy pins, and `.pre-commit-config.yaml`;
-C produced
-`examples/char_rnn.ipynb` and `scripts/download_shakespeare.py`, executed and committed
-with its outputs, and needed no library code to do it; D produced `pynn/viz.py`,
+**All five are finished and their sections removed.** A produced `CONTRIBUTING.md`,
+`CHANGELOG.md`, the annotated `v0.1.0` tag, `pynn/py.typed`, `pynn.__version__`, the
+exact ruff and mypy pins, and `.pre-commit-config.yaml`; B produced the property tests,
+`Unflatten` / `Identity` / `KLDivLoss` / `HingeLoss` / `NAdam` / `OneCycleLR` /
+`ReduceLROnPlateau`, and the in-place optimizer rewrite — see below for what else;
+C produced `examples/char_rnn.ipynb` and `scripts/download_shakespeare.py`, executed and
+committed with its outputs, and needed no library code to do it; D produced `pynn/viz.py`,
 `Tensor.to_dot`, and the tape figure the README now opens with; E produced
 `Tensor.free_graph()`, `benchmarks/memory.py`, and a char-RNN notebook that no longer
-calls `gc.collect()`. The remaining letters are left as they were rather than shifted
-up, so a prompt already in flight still means what it said.
+calls `gc.collect()`. The letters are left as they were rather than compacted, so a
+prompt already in flight still means what it said.
 
-E is the only prompt here that came out of another prompt's work rather than out of a
-review pass: C turned up the reference cycle on its way through writing the notebook,
-and that finding took the `TASKS.md` slot the example domain had vacated. **B is the
-only package left.**
+E and B both came out of other work rather than out of a review pass: C turned up the
+reference cycle on its way through writing the notebook, and B turned up items 1a and 3a
+on its way through items 1 and 3. **There is no package left to hand out.** What remains
+in `TASKS.md` — items 1a, 3a, the rest of 2, 4, 5, and the sequence-modelling chain 6-8 —
+has no prompt written for it, and the note at the top of this file about why still holds:
+4 is a decision rather than a package, 5 is mechanical, 3a is a measurement problem
+rather than a feature, and 6-8 are a dependency chain. Anything new wants its own prompt,
+written when it is actually scheduled.
+
+### If you are writing the next one
+
+Three things about prompt B are worth carrying forward, and none of them are about its
+subject matter.
+
+- **It gave a number to respect and the number was wrong.** "An in-place NumPy rewrite
+  measured 1.8-2.5x" was an isolated microbenchmark, and the prompt said to extend those
+  measurements rather than re-derive them — which is right for saving effort and wrong
+  when the recorded number is the thing that needs checking. A prompt that quotes a
+  measurement should say *how it was taken*, so the agent can tell whether the method
+  survives the new question being asked of it.
+- **"Report what you left out and why" did most of the work.** Nearly everything in
+  `TASKS.md`'s new **Decisions** section came from having to write that paragraph. It is
+  cheaper than a review pass and catches a different class of thing.
+- **The scope instruction held.** "Do NOT do all of it — choose what is coherent and
+  finish it properly rather than half-landing six things" is the line that kept item 2
+  from becoming eight shallow additions, and it is worth reusing verbatim.
 
 ### What E left behind
 
@@ -68,6 +91,54 @@ Queued rather than built, each with its measurements in `TASKS.md`:
 The lesson for whoever writes the next prompt: **the brief is a floor.** Three of these
 came from asking what a change makes *newly* possible to get wrong, which is a question
 worth asking on purpose rather than stumbling into.
+
+### What B left behind
+
+The same pattern again, and the interesting half was the measurement rather than the code.
+
+Shipped beyond the brief:
+
+- **Two bugs in existing code**, both found sideways. The pooling gradient checks passed
+  at `DEFAULT_SEED` and failed at three of six other seeds — inserting new cases earlier
+  in `gradient_cases` shifted every later case's random draw and exposed it. And
+  `ReduceLROnPlateau`'s relative threshold, transcribed from PyTorch as
+  `best * (1 - threshold)`, means a *negative* metric improves by getting worse; that one
+  came from reviewing the new code rather than from a test.
+- **A discrepancy in PyTorch worth knowing about.** `torch.optim.NAdam` keeps
+  `mu_product` and `step` as float32 tensors regardless of the parameter's dtype, so on a
+  float64 parameter it disagrees with the published rule by ~1e-10. The reference
+  transcription matches exactly and the external comparison's tolerance is sized for
+  torch's error, with a docstring saying so — a tolerance nobody can explain is how a
+  real disagreement gets absorbed later.
+- **`docs/DESIGN.md` §15 gained a second half**, on the thing the profile named after
+  `col2im`, and then had to be rewritten once the measurement fell apart.
+
+Retracted rather than shipped, which is the part worth reading:
+
+- **"3.0x isolated becomes 1.6x in a real training loop" was wrong**, and it was in the
+  README, `TASKS.md`, `docs/DESIGN.md` and `CHANGELOG.md` before it was caught. It came
+  from a paired in-loop timer that has a **1.5x ordering bias** — whichever side of the
+  pair runs first wins. The bias was found by filling in the rows the first pass had
+  skipped: three optimizers came out *slower* after removing thirteen allocations, which
+  an independent size sweep says is impossible. The end-to-end whole-step number went the
+  same way: ~0.1–0.2 ms of a ~3.2 ms step against a ±0.4 ms spread.
+- What replaced it is better: **the speedup is a function of parameter size**, 1.2x on a
+  256-element bias to 3.1x on a 200k-element weight matrix, which is the actual
+  explanation for why the MLP step barely moves — four of its six parameters are tiny.
+
+Queued rather than built, each with its reasoning in `TASKS.md`:
+
+- **Item 1a** — the rest of the property tests. The strategies exist now, so the
+  expensive part is paid for.
+- **Item 3a** — a harness that can measure an end-to-end speedup, which this repository
+  does not have. It **blocks** the two remaining acceleration candidates, since their
+  3.3–3.7x and 7.1–7.5x were taken by the method that just failed.
+- **A `Decisions` section in `TASKS.md`** for the five things deliberately not built, so
+  they are not re-proposed as oversights.
+
+The lesson this time: **check how a recorded measurement was taken before extending it.**
+The prompt said to respect the numbers in `TASKS.md` and not re-derive them, which was
+the right instruction for the wrong number.
 
 ---
 
@@ -135,70 +206,20 @@ Every prompt below already includes this. It is repeated here so it can be edite
 
 ---
 
-## Prompt B — Testing, layers, and performance
+## No open prompts
 
-**TASKS.md items 1, 2, 3.** The largest package. Item 3 is measurement-driven and has
-numbers already recorded in `TASKS.md` — respect them.
+Every letter above is finished. `TASKS.md` is the live queue; nothing in it currently has
+a prompt written for it, and two of its entries would want a different *shape* of prompt
+than the five above:
 
-```text
-[paste the shared preamble here]
+- **Item 3a** is a measurement problem, not a feature. A brief for it should say what a
+  usable harness has to prove — that its own ordering bias is smaller than the effect it
+  reports — rather than what to build, and it should treat "no measurable difference" as
+  an acceptable finding rather than a failed task. Prompt B's experience is the reason:
+  its brief assumed the end-to-end number was there to be found.
+- **Item 4** is a decision with three options already measured and written up. It wants a
+  reviewer, not an implementer.
 
-Your job is TASKS.md items 1, 2, and 3. Read those entries first — item 3 in particular
-already contains measurements you should not re-derive from scratch, only extend.
-
-1. Property-based tests over unbroadcast.
-   Add Hypothesis to the dev extra and write property tests for
-   pynn/core/utils.py::unbroadcast and matrix_multiply_gradients. These are the two
-   fiddliest functions in the library — unbroadcast composes two different reduction
-   rules, and matrix_multiply_gradients handles matmul's vector promotion and batch
-   broadcasting. Both are currently covered by a hand-written list of shapes, which is
-   exactly the kind of coverage that misses the case nobody thought of.
-
-   The property worth testing: for any pair of broadcast-compatible shapes,
-   unbroadcast(ones(broadcast_shape), operand_shape) equals the number of times the
-   operand was replicated. And the adjoint identity for matmul:
-   <A @ B, G> == <A, dA> for the dA that matrix_multiply_gradients returns.
-
-   Generate shapes with Hypothesis strategies rather than hand-listing them. Keep the
-   example budget modest so the suite stays under ~10s.
-
-2. More layers, losses, and optimizers.
-   Pick from the table in TASKS.md item 2. Do NOT do all of it — choose what is coherent
-   and finish it properly rather than half-landing six things. Suggested slice, in order
-   of value:
-     - Unflatten / Reshape as the inverse of Flatten, and Identity as a layer. Small, and
-       they complete an obvious gap.
-     - KLDivLoss and HingeLoss, using the shared _reduce helper in
-       pynn/functional/losses.py so the three reduction modes stay consistent.
-     - NAdam, ReduceLROnPlateau, OneCycleLR.
-   Every new op needs a gradcheck entry with a reused-input variant. Every new optimizer
-   needs a closed-form reference transcription in tests/optim/optimizers_test.py — "the
-   loss went down" does not distinguish a correct update rule from a nearly-correct one.
-
-3. Further acceleration — measurement first, and the first win needs no dependency.
-   TASKS.md item 3 records that SGD.update is 32% of an MLP training step, almost all of
-   it allocation: every line builds a fresh full-size array. An in-place NumPy rewrite
-   measured 1.8-2.5x with no dependency and no second implementation; a fused numba
-   kernel measured 4.6-7.2x but costs a dual implementation per optimizer, five of them
-   with four flag variants each.
-
-   Do the in-place rewrite for all five optimizers. Keep the maths identical — the
-   closed-form reference tests must pass unchanged, and that is the point of them.
-   Watch for aliasing: velocity buffers are stored in the optimizer's cache and mutating
-   them in place is fine, but param.data must not be mutated in a way that surprises a
-   caller holding a reference.
-
-   Then re-profile with:
-     .venv/bin/python -m benchmarks.benchmark --steps 25
-   and a cProfile run of an MLP step, and report the new share. Only if SGD.update is
-   still a large fraction should you consider a numba kernel — and if you do, put it
-   behind the same NUMBA_AVAILABLE pattern as pynn/utils/array.py::scatter_windows, with
-   tests asserting the two implementations agree.
-
-   Update the benchmark table in README.md if the numbers move.
-
-Constraints:
-- Item 3 must not change any optimizer's arithmetic. If a reference test needs updating,
-  you have changed behaviour — stop and flag it.
-- Do not add a dependency without a measurement justifying it.
-```
+The rest — items 1a, 2's remainder, 5, and the 6-8 chain — are ordinary packages and
+would follow the shape of A through E: the shared preamble, a numbered brief, and a
+constraints list that says what must *not* change.
