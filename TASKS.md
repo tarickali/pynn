@@ -22,7 +22,58 @@ remaining acceleration candidates cannot honestly be decided without it.
 
 ---
 
+## Decisions, so they are not re-proposed
+
+Things deliberately *not* built, with the reasoning, because the cost of re-litigating
+them is higher than the cost of writing them down.
+
+- **No `Reshape` layer.** `Unflatten` takes the trailing shape of one example and reads
+  the batch size from the input. A layer whose target shape carries the batch size is
+  correct for every batch of an epoch except the last, shorter one, and the symptom is a
+  shape error partway through the first epoch rather than at the line that caused it.
+  Anything that genuinely needs the general form has `Tensor.reshape`, which is
+  differentiable and in the sweep. If a real use case turns up — `(N, C, H, W)` to
+  `(N*C, H, W)` is the plausible one — the answer is a *named* layer for that reshape, not
+  a general one.
+- **No compiled optimizer kernel.** See item 3 and 3a. Not "not yet" so much as "not
+  measurable, and expensive if wrong".
+- **`OneCycleLR` does not cycle momentum**, unlike PyTorch's. See item 2's schedule note
+  for the version of this that *is* queued.
+- **`HingeLoss` refuses `{0, 1}` targets** rather than converting them the way Keras does.
+  Reading a 0 as -1 makes every negative example look correctly classified by exactly the
+  margin, and a model trained that way descends.
+- **`ReduceLROnPlateau`'s relative threshold is a fraction of `abs(best)`**, which
+  diverges from PyTorch. Written PyTorch's way a negative metric improves by getting
+  worse. Not a candidate for "match the reference implementation" cleanup.
+
 ## Nice to have
+
+### 1a. The rest of the property tests, now that the machinery exists
+
+Item 1 put Hypothesis in the `dev` extra and built the shape strategies —
+`broadcastable_to`, `broadcast_pair`, `matmul_shapes` in `tests/core/utils_test.py`. The
+expensive part of a property test is deciding what the property *is* and generating valid
+inputs; both are now paid for, and the same pattern extends cheaply. Candidates, in
+descending order of what a generated case would catch that the current tests do not:
+
+- **`im2col` / `col2im`'s adjoint identity over generated geometries.** The identity
+  `⟨im2col(x), c⟩ == ⟨x, col2im(c)⟩` is already asserted, but over a hand-written list of
+  kernel / stride / padding combinations. Generating them is the obvious win: the
+  interesting cases are the ones where windows overlap unevenly or padding leaves a
+  partial window at the edge, which is exactly the combination nobody enumerates. This
+  also covers the compiled scatter and the NumPy one against each other for free.
+- **`concat` / `split` round-trips over generated split points and axes.** `split` with
+  uneven sizes and an unused piece is in the sweep; generated sizes would reach the
+  ragged cases.
+- **Reduction axes for `sum` / `mean`.** The sweep covers `None, 0, 1, (0, 1), -1` on a
+  square input, which cannot distinguish an axis mix-up.
+- **`unbroadcast` on zero-size shapes.** Left out of item 1 deliberately: "the number of
+  times the operand was replicated" is not a meaningful property when an axis is empty,
+  and `prod(operand) == 0` divides by zero. The adjoint identity holds fine there, so a
+  second strategy that allows 0 would extend the stronger of the two properties.
+
+Keep the whole property suite inside a second or two, and keep `derandomize=True` — the
+reasoning is in the section comment in `tests/core/utils_test.py`.
 
 ### 2. More layers, losses, and optimizers
 
@@ -33,10 +84,46 @@ Each is small and independent; this is the pile to draw from when time is short.
 | Activations | `Mish`, `Hardswish` |
 | Losses | ~~`KLDivLoss`~~, ~~`HingeLoss`~~ done |
 | Optimizers | ~~`NAdam`~~ done |
-| Schedules | warmup. ~~`ReduceLROnPlateau`~~, ~~`OneCycleLR`~~ done — and `OneCycleLR` *is* the warmup, so a standalone one is now marginal |
+| Schedules | `OneCycleLR`'s momentum cycling (see below). ~~`ReduceLROnPlateau`~~, ~~`OneCycleLR`~~ done — and `OneCycleLR` *is* the warmup, so a standalone warmup schedule is now marginal |
 | Layers | `ConvTranspose2d` (enables an autoencoder example). ~~`Unflatten`~~, ~~`Identity`~~ done |
 | Metrics | a `pynn.metrics` module: accuracy, precision / recall / F1, confusion matrix, MSE / MAE / R² |
 | Ops | `index_update`, the differentiable write — the one below with an argument behind it |
+| Tidying | the two `Identity` classes, and three API gaps, both below |
+
+**`OneCycleLR` should cycle momentum, and the reason it does not is a missing contract.**
+The paper's schedule moves the learning rate *and* the momentum, in opposite directions:
+momentum falls from `max_momentum` to `base_momentum` while the rate climbs, then back.
+Only half of it is implemented, and the half that is missing is not obviously the less
+important one. What blocks it is that `LRScheduler`'s contract is "a schedule writes
+`optimizer.learning_rate`", and momentum is not a property every optimizer has —
+`SGD` and `RMSprop` call it `momentum`, `Adam` and friends have `beta_1`, `Adagrad` and
+`Adadelta` have neither. Doing this properly means deciding what a schedule is allowed to
+write and what happens when it is attached to an optimizer that has no such knob:
+silently skipping is the PyTorch answer and is the wrong one for this library. Worth doing
+*because* of that question rather than in spite of it.
+
+**Two classes are named `Identity`, and one of them could go.** `pynn.nn.Identity` is the
+layer, a `Module`, and the only one exported; `pynn.nn.activations.Identity` is the
+stateless `Activation` that `activation_factory("identity")` returns and that every
+layer's default `activation=` binds to. Collapsing them into one `Module` would be
+cleaner — one name, one class, and `isinstance(activation_factory("identity"),
+nn.Identity)` would become true, which today it is not.
+
+It was measured rather than assumed: making the single class a `Module` registers an
+empty child under `act_fn` on **every layer in the library**, because identity is the
+default activation. Nine tests assert on the shape of the module tree and all nine fail;
+`parameter_groups()` grows by one empty group per layer, and `summary()` and
+`named_modules()` list an `act_fn` that does nothing. None of that is *wrong* — empty
+groups are already expected and index-aligned, and `PReLU` is the precedent for a Module
+used as an activation — but it is a change to what every model's tree looks like, and it
+wants to be that change deliberately rather than a side effect of tidying a name. The
+alternative is to leave the pair and keep the docstring that explains it, which is what
+is there now.
+
+**Three API gaps, each about an hour, none of them interesting.** `ReduceLROnPlateau` has
+no `eps` (PyTorch skips an update smaller than it; `min_lr` already covers the floor, so
+this is cosmetic). `OneCycleLR` takes `total_steps` but not `epochs` + `steps_per_epoch`,
+and has no `three_phase`. Listed only so that "is this missing on purpose?" has an answer.
 
 **`index_update` closes the indexing family.** Reading is differentiable: `x[key]`
 gathers, and its reverse scatters the gradient back into the positions it read from.
@@ -452,4 +539,20 @@ Recorded so this file does not re-propose them. Details in `PROJECT_REVIEW.md` P
   axis and a squeeze that should have been a sum still produces the right shape.
   Mutation-checked against the hand-written list they sit beside: transposing the wrong
   operand inside `matrix_multiply_gradients` passes every parametrized case and fails
-  the property
+  the property. Item 1a is what the strategies it built now make cheap
+- **Item 2's losses, optimizer, schedules and two layers.** `KLDivLoss` and `HingeLoss`
+  through the shared `_reduce`; `NAdam`; `OneCycleLR` and `ReduceLROnPlateau`;
+  `Unflatten` and `Identity`-as-a-layer. What is left of item 2 is `Mish` / `Hardswish`,
+  `ConvTranspose2d`, `pynn.metrics`, `index_update`, and the tidying items above
+- **Item 3's in-place optimizer rewrite**, and item 3a is what it turned up: the
+  end-to-end number it was supposed to produce could not be measured, and two harnesses
+  were thrown away finding that out. The remaining acceleration candidates inherit the
+  problem, which is why 3a is a prerequisite rather than a nicety
+- **A latent gradcheck fragility**, found because item 1 and item 2 inserted cases
+  earlier in `gradient_cases` and shifted every later case's random draw. Both pooling
+  checks drew inputs from `permutation(0..99)`, where round-off in a central difference
+  divided by `2 * eps` clears `atol`; they passed at `DEFAULT_SEED` and failed at three
+  of six others. The permutation is now scaled into `[-0.5, 0.5]`, average pooling takes
+  ordinary normal inputs, the sweep is clean across 60 seeds, and four of them are
+  pinned by a test. Worth remembering as a *class* of problem: a shared generator makes
+  every case's inputs depend on how many cases precede it
